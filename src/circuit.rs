@@ -29,19 +29,32 @@ use ark_sponge::constraints::CryptographicSpongeVar;
 use ark_sponge::CryptographicSponge;
 // use ark_ed_on_bls12_381::{EdwardsProjective as Curve, Fr, Fq, EdwardsParameters as BlsParameters};
 // use ark_ed_on_bls12_381::constraints::{EdwardsVar as G1Var};
+use group::Curve as _;
 
+use ark_serialize::CanonicalDeserialize;
+//use ark_bls12_377::{G1Projective as Curve, Fq12Parameters, Fq, Fr, Fq12, Parameters as BlsParameters, Bls12_377, G1Projective, G2Affine};
+//use ark_bls12_377::constraints::{G1Var, FqVar, Fq12Var};
 
-use ark_bls12_377::{G1Projective as Curve, Fq12Parameters, Fq, Fr, Fq12, Parameters as BlsParameters, constraints::{G1Var, Fq12Var}, Bls12_377};
-use ark_bls12_377::constraints::FqVar;
-use crate::utils::{curve_scalar_mul_le, field_scalar_mul_le};
+use ark_bls12_381::{G1Projective as Curve, Fq12Parameters, Fq, Fr, Fq12, Parameters as BlsParameters, Bls12_381 as Bls12_377, G1Projective, G2Affine};
+// use ark_bls12_377::constraints::{G1Var, FqVar, Fq12Var};
+
+use crate::utils::{curve_scalar_mul_le, field_scalar_mul_le, from_compressed_bytes, gt_to_fqs, gtvar_to_fqvars};
 // use ark_bls12_381::{G1Projective as Curve, Fq12Parameters, Fq, Fr, Parameters as BlsParameters};
 // type G1Var = ark_r1cs_std::groups::bls12::G1Var<BlsParameters>;
+
+use sha2::Sha256;
+
+
+type G1Var = ark_r1cs_std::groups::bls12::G1Var<ark_bls12_381::Parameters>;
+type FqVar = ark_r1cs_std::fields::fp::FpVar<ark_bls12_381::Fq>;
+type Fq12Var = ark_r1cs_std::fields::fp12::Fp12Var<ark_bls12_381::fq12::Fq12Parameters>;
 
 
 pub struct EncryptCircuit
 {
+    gid: Fq12,
     sigma: Randomness<Curve>,
-    gid: PublicKey<Bls12_377>,
+    master: PublicKey<Bls12_377>,
     msg: Plaintext<Curve>,
     pub resulted_ciphertext: Ciphertext<Curve>,
     params: Parameters<Curve>,
@@ -67,9 +80,9 @@ impl<C: ProjectiveCurve> Default for Parameters<C>
     }
 }
 
-pub type PublicKey<E: PairingEngine> = E::Fqk;
+pub type PublicKey<E: PairingEngine> = E::G1Affine;
 
-pub type SecretKey<C: ProjectiveCurve> = C::ScalarField;
+pub type SecretKey<E: PairingEngine> = E::G2Affine;
 
 pub struct Randomness<C: ProjectiveCurve>(pub C::BaseField);
 
@@ -82,26 +95,31 @@ impl<C: ProjectiveCurve> UniformRand for Randomness<C> {
 
 pub type Plaintext<C: ProjectiveCurve> = C::BaseField;
 
-pub type Ciphertext<C: ProjectiveCurve> = (C, C::BaseField, C::BaseField);
+#[derive(Clone, Debug)]
+pub struct  Ciphertext<C: ProjectiveCurve> {
+    u: C,
+    v: C::BaseField,
+    w: C::BaseField,
+}
 
 impl EncryptCircuit
 {
-    pub fn new<R: Rng>(
-        gid: PublicKey<Bls12_377>,
+    pub fn new<I: AsRef<[u8]>, R: Rng + CryptoRng>(
+        master: PublicKey<Bls12_377>,
+        id: I,
         msg: Plaintext<Curve>,
         params: Parameters<Curve>,
-        rnd: &mut R,
+        rng: &mut R,
     ) -> anyhow::Result<Self> {
-        let r = Randomness::rand(rnd);
-
-        let enc = Self::encrypt(&gid, &msg, &r, &params)
+        let (gid, sigma, ct) = Self::encrypt_inner(&master, id, &msg, rng, &params)
             .map_err(|e| anyhow!("error encrypting message: {e}"))?;
 
         Ok(Self {
-            sigma: r,
-            msg,
             gid,
-            resulted_ciphertext: enc,
+            sigma,
+            msg,
+            master,
+            resulted_ciphertext: ct,
             params,
         })
     }
@@ -111,19 +129,44 @@ impl EncryptCircuit
         params: &Parameters<Curve>,
     ) -> Vec<Fq>
     {
-        let u_inputs = cipher.0.to_field_elements().unwrap();
-        let v_inputs = cipher.1.to_field_elements().unwrap();
-        let w_inputs = cipher.2.to_field_elements().unwrap();
+        let u_inputs = cipher.u.to_field_elements().unwrap();
+        let v_inputs = cipher.v.to_field_elements().unwrap();
+        let w_inputs = cipher.w.to_field_elements().unwrap();
 
         u_inputs.into_iter().chain(v_inputs).chain(w_inputs).collect()
     }
 
-    pub fn encrypt(
-        gid: &PublicKey<Bls12_377>,
+    pub fn encrypt<I: AsRef<[u8]>, R: Rng + CryptoRng>(
+        master: &PublicKey<Bls12_377>,
+        id: I,
         msg: &Plaintext<Curve>,
-        sigma: &Randomness<Curve>,
         params: &Parameters<Curve>,
+        rng: &mut R,
     ) -> anyhow::Result<Ciphertext<Curve>> {
+        let (_, _, ct) = Self::encrypt_inner(master, id, msg, rng, params)?;
+        Ok(ct)
+    }
+
+    fn encrypt_inner<I: AsRef<[u8]>, R: Rng + CryptoRng>(
+        master: &PublicKey<Bls12_377>,
+        id: I,
+        msg: &Plaintext<Curve>,
+        rng: &mut R,
+        params: &Parameters<Curve>,
+    ) -> anyhow::Result<(Fq12, Randomness<G1Projective>, Ciphertext<Curve>)> {
+        // 1. Compute Gid = e(master,Q_id)
+        // Note: hash-to-curve algo is `draft-irtf-cfrg-bls-signature-05` which matches to the one used in Drand network,
+        // hash function is Sha2 despite the fact that poseidon is used elsewhere to optimize proving performance.
+        let gid = {
+            let qid = bls12_381_plus::G2Projective::hash::<bls12_381_plus::ExpandMsgXmd<Sha256>>(id.as_ref(), tlock::ibe::H2C_DST)
+                .to_affine();
+            let qid: G2Affine = from_compressed_bytes(&qid.to_uncompressed())?;
+            Bls12_377::pairing(master.clone(), qid)
+        };
+
+        // 2. Derive random sigma
+        let sigma = Randomness::rand(rng);
+
         // 3. Derive r from sigma and msg
         let r = {
             let mut sponge = PoseidonSponge::new(&params.poseidon);
@@ -140,22 +183,10 @@ impl EncryptCircuit
 
         // 5. Compute V = sigma XOR H(rGid)
         let v = {
+            let mut r_gid: Fq12 = field_scalar_mul_le(gid.clone(), r.into_repr().to_bytes_le());
+
             let mut sponge = PoseidonSponge::new(&params.poseidon);
-            let mut r_gid: Fq12 = field_scalar_mul_le((*gid).clone(), r.into_repr().to_bytes_le());
-
-            sponge.absorb(&r_gid.c0.c0.c0);
-            sponge.absorb(&r_gid.c0.c0.c1);
-            sponge.absorb(&r_gid.c0.c1.c0);
-            sponge.absorb(&r_gid.c0.c1.c1);
-            sponge.absorb(&r_gid.c0.c2.c0);
-            sponge.absorb(&r_gid.c0.c2.c1);
-            sponge.absorb(&r_gid.c1.c0.c0);
-            sponge.absorb(&r_gid.c1.c0.c1);
-            sponge.absorb(&r_gid.c1.c1.c0);
-            sponge.absorb(&r_gid.c1.c1.c1);
-            sponge.absorb(&r_gid.c1.c2.c0);
-            sponge.absorb(&r_gid.c1.c2.c1);
-
+            sponge.absorb(&gt_to_fqs(&r_gid));
             let h_r_gid = sponge.squeeze_field_elements::<Fq>(1).remove(0);
 
             sigma.0 + h_r_gid
@@ -163,21 +194,64 @@ impl EncryptCircuit
 
         // 6. Compute W = M XOR H(sigma)
         let w = {
+            // todo: could we skip hashing here?
             let mut sponge = PoseidonSponge::new(&params.poseidon);
             sponge.absorb(&sigma.0);
             let h_sigma = sponge.squeeze_field_elements::<Fq>(1).remove(0);
-            h_sigma
+            (*msg).clone() + h_sigma
         };
 
-        Ok((u, v, w))
+        Ok((gid, sigma, Ciphertext{
+            u,
+            v,
+            w
+        }))
+    }
+
+    pub fn decrypt(
+        sk: &SecretKey<Bls12_377>,
+        ct: &Ciphertext<Curve>,
+        params: &Parameters<Curve>,
+    ) -> anyhow::Result<Plaintext<Curve>> {
+        // 1. Compute sigma = V XOR H2(e(rP,private))
+        let sigma = {
+            let r_gid = Bls12_377::pairing(ct.u.clone(), sk.clone());
+            let mut sponge = PoseidonSponge::new(&params.poseidon);
+            sponge.absorb(&gt_to_fqs(&r_gid));
+            sponge.squeeze_field_elements::<Fq>(1).remove(0)
+        };
+
+        // 2. Compute Msg = W XOR H4(sigma)
+        let msg = {
+            // todo: could we skip hashing here?
+            let mut sponge = PoseidonSponge::new(&params.poseidon);
+            sponge.absorb(&sigma);
+            let h_sigma = sponge.squeeze_field_elements::<Fq>(1).remove(0);
+            ct.w.clone() - h_sigma
+        };
+
+        // 3. Check U = G^r
+        let r_g = {
+            let mut sponge = PoseidonSponge::new(&params.poseidon);
+            sponge.absorb(&sigma);
+            sponge.absorb(&msg);
+            let r = sponge.squeeze_field_elements::<Fq>(1).remove(0);
+            curve_scalar_mul_le(
+                Curve::prime_subgroup_generator(),
+                r.into_repr().to_bytes_le()
+            )
+        };
+        assert_eq!(ct.u, r_g);
+
+        Ok(msg)
     }
 
     pub(crate) fn verify_encryption(
         &self,
         cs: ConstraintSystemRef<Fq>,
         gid: Fp12Var<Fq12Parameters>,
-        plaintext: &FpVar<Fq>,
-        ciphertext: &(G1Var, FpVar<Fq>, FpVar<Fq>),
+        msg: &FpVar<Fq>,
+        ct: &(G1Var, FpVar<Fq>, FpVar<Fq>),
     ) -> Result<(), SynthesisError> {
         let g = G1Var::new_constant(ns!(cs, "generator"), Curve::prime_subgroup_generator())?;
 
@@ -189,7 +263,7 @@ impl EncryptCircuit
         let r = {
             let mut sponge = PoseidonSpongeVar::new(cs.clone(), &self.params.poseidon);
             sponge.absorb(&sigma)?;
-            sponge.absorb(&plaintext)?;
+            sponge.absorb(&msg)?;
             sponge
                 .squeeze_field_elements(1)
                 .and_then(|r| Ok(r[0].clone()))?.to_bits_le()?
@@ -197,7 +271,7 @@ impl EncryptCircuit
 
         // 4. Compute U = G*r
         let u = g.clone().scalar_mul_le(r.iter())?;
-        u.enforce_equal(&ciphertext.0)?;
+        u.enforce_equal(&ct.0)?;
 
         // 5. Compute V = sigma XOR H(rGid)
         let v = {
@@ -212,25 +286,15 @@ impl EncryptCircuit
                 res
             };
             let mut sponge = PoseidonSpongeVar::new(cs.clone(), &self.params.poseidon);
-            sponge.absorb(&r_gid.c0.c0.c0)?;
-            sponge.absorb(&r_gid.c0.c0.c1)?;
-            sponge.absorb(&r_gid.c0.c1.c0)?;
-            sponge.absorb(&r_gid.c0.c1.c1)?;
-            sponge.absorb(&r_gid.c0.c2.c0)?;
-            sponge.absorb(&r_gid.c0.c2.c1)?;
-            sponge.absorb(&r_gid.c1.c0.c0)?;
-            sponge.absorb(&r_gid.c1.c0.c1)?;
-            sponge.absorb(&r_gid.c1.c1.c0)?;
-            sponge.absorb(&r_gid.c1.c1.c1)?;
-            sponge.absorb(&r_gid.c1.c2.c0)?;
-            sponge.absorb(&r_gid.c1.c2.c1)?;
+            // sponge.absorb(&gtvar_to_fqvars(&r_gid))?;
+
             let h_r_gid = sponge
                 .squeeze_field_elements(1)
                 .and_then(|r| Ok(r[0].clone()))?;
 
             &sigma + h_r_gid
         };
-        v.enforce_equal(&ciphertext.1)?;
+        v.enforce_equal(&ct.1)?;
 
 
         // 6. Compute W = M XOR H(sigma)
@@ -241,10 +305,10 @@ impl EncryptCircuit
                 .squeeze_field_elements(1)
                 .and_then(|r| Ok(r[0].clone()))?;
 
-            h_sigma
+            msg + h_sigma
         };
 
-        w.enforce_equal(&ciphertext.2)?;
+        w.enforce_equal(&ct.2)?;
 
         Ok(())
     }
@@ -256,13 +320,13 @@ impl EncryptCircuit
     ) -> Result<(G1Var, FpVar<Fq>, FpVar<Fq>), SynthesisError> {
         let u = G1Var::new_variable(
             ns!(cs, "ciphertext_u"),
-            || Ok(self.resulted_ciphertext.0),
+            || Ok(self.resulted_ciphertext.u),
             mode,
         )?;
         let v = FpVar::<Fq>::new_variable(
             ns!(cs, "ciphertext_v"),
             || {
-                Ok(self.resulted_ciphertext.1)
+                Ok(self.resulted_ciphertext.v)
             },
             mode,
         )?;
@@ -270,7 +334,7 @@ impl EncryptCircuit
         let w = FpVar::<Fq>::new_variable(
             ns!(cs, "ciphertext_w"),
             || {
-                Ok(self.resulted_ciphertext.2)
+                Ok(self.resulted_ciphertext.w)
             },
             mode,
         )?;
@@ -294,5 +358,99 @@ impl ConstraintSynthesizer<Fq> for EncryptCircuit
         let ciphertext = self.ciphertext_var(cs.clone(), AllocationMode::Input)?;
 
         self.verify_encryption(cs.clone(), gid, &message, &ciphertext)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ark_std::test_rng;
+    use crate::poseidon;
+    use super::*;
+
+    // use ark_bls12_377::{G1Projective as ProjectiveEngine, Fq, Fr, Fq12, G1Affine};
+    use ark_bls12_381::{G1Projective as ProjectiveEngine, Fq, Fr, Fq12, G1Affine, Bls12_381};
+    use ark_bw6_761::BW6_761;
+    use ark_ed_on_bls12_381::{EdwardsProjective, EdwardsParameters};
+
+    use ark_ff::{Field, Zero};
+    use ark_groth16::Groth16;
+    use ark_serialize::CanonicalSerialize;
+
+    use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
+    use sha2::Digest;
+    use crate::utils::{from_compressed_bytes, g1_from_uncompressed_bytes};
+
+    #[test]
+    fn test_decode() {
+        let pk = {
+            let bytes = hex::decode("8200fc249deb0148eb918d6e213980c5d01acd7fc251900d9260136da3b54836ce125172399ddc69c4e3e11429b62c11").unwrap();
+            println!("{} {}", bytes.len(), hex::encode(&bytes));
+
+            let x = bls12_381_plus::G1Affine::from_compressed((&*bytes).try_into().unwrap()).unwrap();
+
+            g1_from_uncompressed_bytes(&x.to_uncompressed()).unwrap()
+        };
+    }
+
+    #[test]
+    fn test_decrypt() {
+        let mut rng = test_rng();
+        let bytes = [1, 2, 3];
+        let msg = Fq::from_random_bytes(&bytes).unwrap();
+
+        let params = Parameters::<ProjectiveEngine> {
+            poseidon: get_poseidon_params::<ProjectiveEngine>(2),
+        };
+        let pk = {
+            let bytes = hex::decode("8200fc249deb0148eb918d6e213980c5d01acd7fc251900d9260136da3b54836ce125172399ddc69c4e3e11429b62c11").unwrap();
+            let tmp = bls12_381_plus::G1Affine::from_compressed((&*bytes).try_into().unwrap()).unwrap();
+
+            g1_from_uncompressed_bytes(&tmp.to_uncompressed()).unwrap()
+        };
+        let sigma = Randomness::<G1Projective>::rand(&mut rng);
+
+        let round_number = 1000u64;
+        let id = {
+            let mut hash = sha2::Sha256::new();
+            hash.update(&round_number.to_be_bytes());
+            &hash.finalize().to_vec()[0..32]
+        };
+
+        let ct = EncryptCircuit::encrypt(&pk, id, &msg, &params, &mut rng).unwrap();
+    }
+
+    #[test]
+    fn test_circuit() {
+        let mut rng = test_rng();
+        let bytes = [1, 2, 3];
+        let msg = Fq::from_random_bytes(&bytes).unwrap();
+
+        let params = Parameters::<ProjectiveEngine> {
+            poseidon: get_poseidon_params::<ProjectiveEngine>(2),
+        };
+        let master: _ = {
+            let bytes = hex::decode("8200fc249deb0148eb918d6e213980c5d01acd7fc251900d9260136da3b54836ce125172399ddc69c4e3e11429b62c11").unwrap();
+            from_compressed_bytes::<G1Affine>(&bytes).unwrap()
+        };
+        let round_number = 1000u64;
+        let id = {
+            let mut hash = sha2::Sha256::new();
+            hash.update(&round_number.to_be_bytes());
+            &hash.finalize().to_vec()[0..32]
+        };
+
+        // let circuit = EncryptCircuit::new(
+        //     master.clone(),
+        //     &id,
+        //     msg.clone().into(),
+        //     params.clone(),
+        //     &mut rng,
+        // ).unwrap();
+        //
+        // let (pk, _vk) = Groth16::<Bls12_377>::setup(circuit, &mut rng).unwrap();
+        //
+        // let circuit = EncryptCircuit::new(master, id, msg.clone().into(), params.clone(), &mut rng).unwrap();
+        // let ct = circuit.resulted_ciphertext.clone();
+        // let _proof = Groth16::prove(&pk, circuit, &mut rng).unwrap();
     }
 }

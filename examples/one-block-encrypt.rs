@@ -37,10 +37,10 @@ fn main() {
     let (pk, _vk) = Groth16::<BW6_761>::setup(circuit, &mut rng).unwrap();
 
     let circuit = EncryptCircuit::new(gid, msg.clone().into(), params.clone(), &mut rng).unwrap();
-    let enc = circuit.resulted_ciphertext.clone();
+    let ct = circuit.resulted_ciphertext.clone();
     let _proof = Groth16::prove(&pk, circuit, &mut rng).unwrap();
 
-    // let public_inputs = EncryptCircuit::get_public_inputs(&enc, &params);
+    // let public_inputs = EncryptCircuit::get_public_inputs(&ct, &params);
     // let valid_proof = Groth16::<Bls12_377>::verify(&vk, &public_inputs, &proof).unwrap();
     // assert!(valid_proof);
 }
