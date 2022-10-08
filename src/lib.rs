@@ -2,6 +2,7 @@ pub mod circuit;
 mod parameters;
 pub mod poseidon;
 pub mod utils;
+mod nonnative;
 
 pub use crate::circuit::*;
 pub use ark_ed_on_bls12_381::{constraints::EdwardsVar as JubJubVar, EdwardsProjective as JubJub};

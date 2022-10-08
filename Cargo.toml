@@ -14,6 +14,7 @@ ark-relations = { version = "^0.3.0", default-features = false, optional = true}
 ark-groth16 = { version = "^0.3.0", features = ["r1cs", "std"] }
 ark-sponge = { version = "^0.3.0" , features = ["r1cs"] }
 ark-serialize = { version = "^0.3.0", default-features = false }
+ark-nonnative-field = { version = "^0.3.0", default-features = false }
 ark-ed-on-bls12-381 = { version = "^0.3.0", default-features = false, features = [ "r1cs" ] }
 ark-bls12-381 = { version = "^0.3.0", features = [ "curve", "scalar_field" ] }
 ark-bn254 = { version = "^0.3.0" }

@@ -14,8 +14,6 @@ pub fn from_compressed_bytes<T: CanonicalDeserialize>(bytes: &[u8]) -> anyhow::R
 
 
 pub fn g1_from_uncompressed_bytes(bytes: &[u8]) -> anyhow::Result<ark_bls12_381::G1Affine> {
-    // Obtain the three flags from the start of the byte sequence
-
     let x = {
         let mut tmp = [0; 48];
         tmp.copy_from_slice(&bytes[0..48]);
@@ -38,29 +36,46 @@ pub fn g1_from_uncompressed_bytes(bytes: &[u8]) -> anyhow::Result<ark_bls12_381:
     Ok(ark_bls12_381::G1Affine::new(x, y, false))
 }
 
-pub fn g2_from_uncompressed_bytes(bytes: &[u8]) -> anyhow::Result<ark_bls12_381::G1Affine> {
-    // Obtain the three flags from the start of the byte sequence
-
-    let x = {
-        let mut tmp = [0; 96];
-        tmp.copy_from_slice(&bytes[0..96]);
+pub fn g2_from_uncompressed_bytes(bytes: &[u8]) -> anyhow::Result<ark_bls12_381::G2Affine> {
+    let xc0 = {
+        let mut tmp = [0; 48];
+        tmp.copy_from_slice(&bytes[0..48]);
 
         // Mask away the flag bits
         tmp[0] &= 0b0001_1111;
 
-        let x = bls12_381_plus::fp::Fp::from_bytes(&tmp).unwrap().0;
-        ark_bls12_381::Fq::from(BigInteger384(x))
+        ark_bls12_381::Fq::from(BigInteger384::new(bls12_381_plus::fp::Fp::from_bytes(&tmp).unwrap().0))
+    };
+
+    let xc1 = {
+        let mut tmp = [0; 48];
+        tmp.copy_from_slice(&bytes[48..96]);
+
+        // Mask away the flag bits
+        tmp[0] &= 0b0001_1111;
+
+        ark_bls12_381::Fq::from(BigInteger384::new(bls12_381_plus::fp::Fp::from_bytes(&tmp).unwrap().0))
     };
 
     // Attempt to obtain the y-coordinate
-    let y = {
-        let mut tmp = [0; 96];
-        tmp.copy_from_slice(&bytes[96..192]);
+    let yc0 = {
+        let mut tmp = [0; 48];
+        tmp.copy_from_slice(&bytes[96..144]);
 
-        ark_bls12_381::Fq::from(BigInteger384(bls12_381_plus::fp::Fp::from_bytes(&tmp).unwrap().0))
+        ark_bls12_381::Fq::from(BigInteger384::new(bls12_381_plus::fp::Fp::from_bytes(&tmp).unwrap().0))
+    };
+    let yc1 = {
+        let mut tmp = [0; 48];
+        tmp.copy_from_slice(&bytes[144..192]);
+
+        ark_bls12_381::Fq::from(BigInteger384::new(bls12_381_plus::fp::Fp::from_bytes(&tmp).unwrap().0))
     };
 
-    Ok(ark_bls12_381::G1Affine::new(x, y, false))
+    Ok(ark_bls12_381::G2Affine::new(
+        ark_bls12_381::Fq2::new(xc0, xc1),
+        ark_bls12_381::Fq2::new(yc0, yc1),
+        false,
+    ))
 }
 
 
