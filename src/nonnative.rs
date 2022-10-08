@@ -1,12 +1,16 @@
+use std::borrow::Borrow;
+use std::marker::PhantomData;
 use std::ops::{Add, AddAssign};
 use ark_ec::bls12::Bls12Parameters;
 use ark_ec::group::Group;
-use ark_ff::{Field, One, PrimeField, Zero};
+use ark_ff::{Field, Fp12, Fp12Parameters, Fp2Parameters, One, PrimeField, QuadExtField, QuadExtParameters, Zero};
 use ark_nonnative_field::NonNativeFieldVar;
 use ark_r1cs_std::boolean::Boolean;
 use ark_r1cs_std::eq::EqGadget;
 use ark_r1cs_std::fields::{FieldOpsBounds, FieldVar};
-use ark_relations::r1cs::SynthesisError;
+use ark_r1cs_std::fields::quadratic_extension::QuadExtVarParams;
+use ark_r1cs_std::prelude::{AllocationMode, AllocVar};
+use ark_relations::r1cs::{Namespace, SynthesisError};
 
 #[derive(Clone)]
 pub struct NonNativeAffineVar<P: Bls12Parameters, CF: PrimeField>
@@ -122,3 +126,141 @@ impl<P: Bls12Parameters, CF: PrimeField> EqGadget<CF> for NonNativeAffineVar<P, 
     }
 }
 
+#[derive(Clone)]
+pub struct Fp2Var<T: PrimeField, B: PrimeField>
+{
+    /// The zero-th coefficient of this field element.
+    pub c0: NonNativeFieldVar<T, B>,
+    /// The first coefficient of this field element.
+    pub c1: NonNativeFieldVar<T, B>,
+}
+
+
+impl<T: PrimeField, B: PrimeField> Fp2Var<T, B>
+{
+    pub fn new(c0: NonNativeFieldVar<T, B>, c1: NonNativeFieldVar<T, B>) -> Self {
+        Self {
+            c0,
+            c1,
+        }
+    }
+
+    fn zero() -> Self {
+        let c0 = NonNativeFieldVar::<T, B>::zero();
+        let c1 = NonNativeFieldVar::<T, B>::zero();
+        Self::new(c0, c1)
+    }
+
+    fn one() -> Self {
+        let c0 = NonNativeFieldVar::<T, B>::one();
+        let c1 = NonNativeFieldVar::<T, B>::zero();
+        Self::new(c0, c1)
+    }
+
+    fn double(&self) -> Result<Self, SynthesisError> {
+        let c0 = self.c0.double()?;
+        let c1 = self.c1.double()?;
+        Ok(Self::new(c0, c1))
+    }
+
+    fn add(&self, other: &Self) -> Self {
+        let mut c0 = &self.c0 + &other.c0;
+        let mut c1 = &self.c1 + &other.c1;
+        Fp2Var::new(c0, c1)
+    }
+}
+
+#[derive(Clone)]
+pub struct Fp6Var<T: PrimeField, B: PrimeField>
+{
+    /// The zero-th coefficient of this field element.
+    pub c0: Fp2Var<T, B>,
+    /// The first coefficient of this field element.
+    pub c1: Fp2Var<T, B>,
+    /// The second coefficient of this field element.
+    pub c2: Fp2Var<T, B>,
+}
+
+impl<T: PrimeField, B: PrimeField> Fp6Var<T, B>
+{
+    pub fn new(c0: Fp2Var<T, B>, c1: Fp2Var<T, B>, c2: Fp2Var<T, B>) -> Self {
+        Self {
+            c0,
+            c1,
+            c2,
+        }
+    }
+
+    fn zero() -> Self {
+        let c0 = Fp2Var::<T, B>::zero();
+        let c1 = Fp2Var::<T, B>::zero();
+        let c2 = Fp2Var::<T, B>::zero();
+        Self::new(c0, c1, c2)
+    }
+
+    fn one() -> Self {
+        let c0 = Fp2Var::<T, B>::one();
+        let c1 = Fp2Var::<T, B>::zero();
+        let c2 = Fp2Var::<T, B>::zero();
+        Self::new(c0, c1, c2)
+    }
+
+    fn double(&self) -> Result<Self, SynthesisError> {
+        let c0 = self.c0.double()?;
+        let c1 = self.c1.double()?;
+        let c2 = self.c2.double()?;
+        Ok(Self::new(c0, c1, c2))
+    }
+
+    fn add(&self, other: &Self) -> Self {
+        let mut c0 = self.c0.add(&other.c0);
+        let mut c1 = self.c1.add(&other.c1);
+        let mut c2 = self.c2.add(&other.c2);
+        Self::new(c0, c1, c2)
+    }
+}
+
+
+#[derive(Clone)]
+pub struct Fp12Var<T: PrimeField, B: PrimeField>
+{
+    /// The zero-th coefficient of this field element.
+    pub c0: Fp6Var<T, B>,
+    /// The first coefficient of this field element.
+    pub c1: Fp6Var<T, B>,
+}
+
+
+impl<T: PrimeField, B: PrimeField> Fp12Var<T, B>
+{
+    pub fn new(c0: Fp6Var<T, B>, c1: Fp6Var<T, B>) -> Self {
+        Self {
+            c0,
+            c1,
+        }
+    }
+
+    fn zero() -> Self {
+        let c0 = Fp6Var::<T, B>::zero();
+        let c1 = Fp6Var::<T, B>::zero();
+        Self::new(c0, c1)
+    }
+
+    fn one() -> Self {
+        let c0 = Fp6Var::<T, B>::one();
+        let c1 = Fp6Var::<T, B>::zero();
+        Self::new(c0, c1)
+    }
+
+    fn double(&self) -> Result<Self, SynthesisError> {
+        let c0 = self.c0.double()?;
+        let c1 = self.c1.double()?;
+        Ok(Self::new(c0, c1))
+    }
+
+    fn add(&self, other: &Self) -> Self {
+        let mut c0 = self.c0.add(&other.c0);
+        let mut c1 = self.c1.add(&other.c1);
+        Self::new(c0, c1)
+    }
+}

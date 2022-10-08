@@ -6,9 +6,7 @@ use ark_r1cs_std::fields::fp::FpVar;
 use ark_r1cs_std::prelude::*;
 use ark_r1cs_std::ToConstraintFieldGadget;
 use ark_relations::ns;
-use ark_relations::r1cs::{
-    ConstraintSynthesizer, ConstraintSystem, ConstraintSystemRef, SynthesisError,
-};
+use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystem, ConstraintSystemRef, Namespace, SynthesisError};
 use ark_r1cs_std::groups::CurveVar;
 use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
 use ark_sponge::poseidon::constraints::PoseidonSpongeVar;
@@ -50,9 +48,9 @@ use crate::nonnative::NonNativeAffineVar;
 
 type G1Var = NonNativeAffineVar<ark_bls12_381::Parameters, ark_bls12_377::Fq>;
 type FqVar = NonNativeFieldVar<ark_bls12_381::Fq, ark_bls12_377::Fq>;
-type Fq2Var = ark_r1cs_std::fields::quadratic_extension::QuadExtVar<FqVar, Fp2ParamsWrapper<ark_bls12_381::Fq2Parameters>>;
-type Fq6Var = ark_r1cs_std::fields::fp6_3over2::CubicExtVar<Fq2Var, Fp6ParamsWrapper<ark_bls12_381::Fq6Parameters>>;
-type Fq12Var = ark_r1cs_std::fields::quadratic_extension::QuadExtVar<Fq6Var, Fp12ParamsWrapper<ark_bls12_381::Fq12Parameters>>;
+type Fq2Var = crate::nonnative::Fp2Var<ark_bls12_381::Fq, ark_bls12_377::Fq>;
+type Fq6Var = crate::nonnative::Fp6Var<ark_bls12_381::Fq, ark_bls12_377::Fq>;
+type Fq12Var = crate::nonnative::Fp12Var<ark_bls12_381::Fq, ark_bls12_377::Fq>;
 
 pub struct EncryptCircuit
 {
@@ -378,7 +376,7 @@ impl ConstraintSynthesizer<Fq> for EncryptCircuit
         self,
         cs: ConstraintSystemRef<Fq>,
     ) -> Result<(), SynthesisError> {
-        let gid = Fq12Var::new_input(ns!(cs, "gid"), || Ok(self.gid))?;
+        let gid = new_fp12_variable(ns!(cs, "gid"), || Ok(self.gid), AllocationMode::Input)?;
         //let gid = G1Var::new_input(ns!(cs, "gid"), || Ok(self.gid))?;
         let message = FqVar::new_witness(ns!(cs, "plaintext"), || {
             Ok(self.msg)
@@ -387,6 +385,68 @@ impl ConstraintSynthesizer<Fq> for EncryptCircuit
 
         self.verify_encryption(cs.clone(), /*gid,*/ &message, &ciphertext)
     }
+}
+
+pub fn new_fp12_variable<V: Borrow<ark_bls12_381::Fq12>>(
+    cs: impl Into<Namespace<ark_bls12_377::Fq>>,
+    f: impl FnOnce() -> Result<V, SynthesisError>,
+    mode: AllocationMode,
+) -> Result<Fq12Var, SynthesisError> {
+    let ns = cs.into();
+    let cs = ns.cs();
+    let (c0, c1) = match f() {
+        Ok(fe) => (Ok(fe.borrow().c0), Ok(fe.borrow().c1)),
+        Err(_) => (
+            Err(SynthesisError::AssignmentMissing),
+            Err(SynthesisError::AssignmentMissing),
+        ),
+    };
+
+    let c0 = new_fp6_variable(ark_relations::ns!(cs, "c0"), || c0, mode)?;
+    let c1 = new_fp6_variable(ark_relations::ns!(cs, "c1"), || c1, mode)?;
+    Ok(Fq12Var::new(c0, c1))
+}
+
+pub fn new_fp6_variable<V: Borrow<ark_bls12_381::Fq6>>(
+    cs: impl Into<Namespace<ark_bls12_377::Fq>>,
+    f: impl FnOnce() -> Result<V, SynthesisError>,
+    mode: AllocationMode,
+) -> Result<Fq6Var, SynthesisError> {
+    let ns = cs.into();
+    let cs = ns.cs();
+    let (c0, c1, c2) = match f() {
+        Ok(fe) => (Ok(fe.borrow().c0), Ok(fe.borrow().c1), Ok(fe.borrow().c2)),
+        Err(_) => (
+            Err(SynthesisError::AssignmentMissing),
+            Err(SynthesisError::AssignmentMissing),
+            Err(SynthesisError::AssignmentMissing),
+        ),
+    };
+
+    let c0 = new_fp2_variable(ark_relations::ns!(cs, "c0"), || c0, mode)?;
+    let c1 = new_fp2_variable(ark_relations::ns!(cs, "c1"), || c1, mode)?;
+    let c2 = new_fp2_variable(ark_relations::ns!(cs, "c2"), || c2, mode)?;
+    Ok(Fq6Var::new(c0, c1, c2))
+}
+
+pub fn new_fp2_variable<V: Borrow<ark_bls12_381::Fq2>>(
+    cs: impl Into<Namespace<ark_bls12_377::Fq>>,
+    f: impl FnOnce() -> Result<V, SynthesisError>,
+    mode: AllocationMode,
+) -> Result<Fq2Var, SynthesisError> {
+    let ns = cs.into();
+    let cs = ns.cs();
+    let (c0, c1) = match f() {
+        Ok(fe) => (Ok(fe.borrow().c0), Ok(fe.borrow().c1)),
+        Err(_) => (
+            Err(SynthesisError::AssignmentMissing),
+            Err(SynthesisError::AssignmentMissing),
+        ),
+    };
+
+    let c0 = NonNativeFieldVar::new_variable(ark_relations::ns!(cs, "c0"), || c0, mode)?;
+    let c1 = NonNativeFieldVar::new_variable(ark_relations::ns!(cs, "c1"), || c1, mode)?;
+    Ok(Fq2Var::new(c0, c1))
 }
 
 #[cfg(test)]
