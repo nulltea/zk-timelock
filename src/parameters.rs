@@ -1,6 +1,5 @@
 use crate::{poseidon, Parameters};
 use ark_ec::ProjectiveCurve;
-use ark_ed_on_bls12_381::EdwardsProjective as JubJub;
 use json::JsonValue;
 use json::{array, object};
 use lazy_static::lazy_static;

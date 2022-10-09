@@ -1,6 +1,5 @@
 use anyhow::anyhow;
 use ark_bls12_377::{Fq, Fq12, G1Affine};
-use ark_bls12_377::constraints::{Fq12Var, FqVar};
 use ark_ec::{ProjectiveCurve, SWModelParameters};
 use ark_ec::short_weierstrass_jacobian::GroupAffine;
 use ark_ff::{BigInteger256, BigInteger384, Field, Zero};
@@ -11,7 +10,6 @@ pub fn from_compressed_bytes<T: CanonicalDeserialize>(bytes: &[u8]) -> anyhow::R
 
     T::deserialize_unchecked(&mut reader).map_err(|e| anyhow!("deserialization error: {e}"))
 }
-
 
 pub fn g1_from_uncompressed_bytes(bytes: &[u8]) -> anyhow::Result<ark_bls12_381::G1Affine> {
     let x = {
@@ -136,22 +134,5 @@ pub fn gt_to_fqs(gt: &ark_bls12_381::Fq12) -> Vec<ark_bls12_381::Fq> {
         gt.c1.c1.c1,
         gt.c1.c2.c0,
         gt.c1.c2.c1,
-    ]
-}
-
-pub fn gtvar_to_fqvars(gt: &Fq12Var) -> Vec<&FqVar> {
-    return vec![
-        &gt.c0.c0.c0,
-        &gt.c0.c0.c1,
-        &gt.c0.c1.c0,
-        &gt.c0.c1.c1,
-        &gt.c0.c2.c0,
-        &gt.c0.c2.c1,
-        &gt.c1.c0.c0,
-        &gt.c1.c0.c1,
-        &gt.c1.c1.c0,
-        &gt.c1.c1.c1,
-        &gt.c1.c2.c0,
-        &gt.c1.c2.c1,
     ]
 }
