@@ -1,32 +1,53 @@
 use anyhow::anyhow;
-use ark_ec::{bls12, PairingEngine, ProjectiveCurve, SWModelParameters};
+use ark_bls12_377::Bls12_377;
+use ark_bls12_381::Bls12_381;
+use ark_ec::{AffineCurve, bls12, PairingEngine, ProjectiveCurve, SWModelParameters};
 use ark_ec::bls12::Bls12Parameters;
+use ark_ec::group::Group;
 use ark_ec::short_weierstrass_jacobian::GroupAffine;
-use ark_ff::{BigInteger256, BigInteger384, Field, Zero};
+use ark_ff::{BigInteger, BigInteger256, BigInteger384, Field, Fp12ParamsWrapper, PrimeField, QuadExtField, Zero};
 use ark_r1cs_std::fields::fp12::Fp12Var;
 use ark_r1cs_std::fields::fp::FpVar;
 use ark_serialize::{CanonicalDeserialize, SerializationError};
 use group::Curve;
 use sha2::Sha256;
 
-pub trait Hash2Curve: Sized {
-    fn hash(msg: &[u8], dst: &[u8]) -> anyhow::Result<Self>;
+pub trait Hash2Curve: PairingEngine {
+    fn hash(msg: &[u8], dst: &[u8]) -> anyhow::Result<Self::G2Affine>;
 }
 
-impl Hash2Curve for ark_bls12_381::G2Affine where Self: ZkCryptoDeserialize {
-    fn hash(msg: &[u8], dst: &[u8]) -> anyhow::Result<Self> {
+impl Hash2Curve for Bls12_381 where Self::G2Affine: ZkCryptoDeserialize {
+    fn hash(msg: &[u8], dst: &[u8]) -> anyhow::Result<Self::G2Affine> {
         let qid = bls12_381_plus::G2Projective::hash::<bls12_381_plus::ExpandMsgXmd<Sha256>>(msg, dst)
             .to_affine();
-        Self::deserialize_zk_crypto(&qid.to_uncompressed())
+        Self::G2Affine::deserialize_zk_crypto_uncompressed(&qid.to_uncompressed())
+    }
+}
+
+impl Hash2Curve for Bls12_377 {
+    fn hash(msg: &[u8], dst: &[u8]) -> anyhow::Result<Self::G2Affine> {
+        Ok(Self::G2Affine::prime_subgroup_generator())
     }
 }
 
 pub trait ZkCryptoDeserialize: Sized {
     fn deserialize_zk_crypto(bytes: &[u8]) -> anyhow::Result<Self>;
+    fn deserialize_zk_crypto_uncompressed(bytes: &[u8]) -> anyhow::Result<Self>;
+}
+
+pub trait ZkCryptoSerialize: Sized {
+    fn serialize_zk_crypto(bytes: &Self) -> anyhow::Result<Vec<u8>>;
 }
 
 impl ZkCryptoDeserialize for GroupAffine<ark_bls12_381::g1::Parameters> {
     fn deserialize_zk_crypto(bytes: &[u8]) -> anyhow::Result<Self> {
+        let g1 = bls12_381_plus::G1Affine::from_compressed(bytes.try_into().unwrap()).unwrap();
+        let bytes = g1.to_uncompressed();
+
+        Self::deserialize_zk_crypto_uncompressed(&bytes)
+    }
+
+    fn deserialize_zk_crypto_uncompressed(bytes: &[u8]) -> anyhow::Result<Self> {
         let x = {
             let mut tmp = [0; 48];
             tmp.copy_from_slice(&bytes[0..48]);
@@ -34,8 +55,9 @@ impl ZkCryptoDeserialize for GroupAffine<ark_bls12_381::g1::Parameters> {
             // Mask away the flag bits
             tmp[0] &= 0b0001_1111;
 
-            let x = bls12_381_plus::fp::Fp::from_bytes(&tmp).unwrap().0;
-            ark_bls12_381::Fq::from(BigInteger384(x))
+            let mut x= ark_bls12_381::Fq::zero();
+            x.0.0 = bls12_381_plus::fp::Fp::from_bytes(&tmp).unwrap().0;
+            x
         };
 
         // Attempt to obtain the y-coordinate
@@ -43,7 +65,9 @@ impl ZkCryptoDeserialize for GroupAffine<ark_bls12_381::g1::Parameters> {
             let mut tmp = [0; 48];
             tmp.copy_from_slice(&bytes[48..96]);
 
-            ark_bls12_381::Fq::from(BigInteger384(bls12_381_plus::fp::Fp::from_bytes(&tmp).unwrap().0))
+            let mut y= ark_bls12_381::Fq::zero();
+            y.0.0 = bls12_381_plus::fp::Fp::from_bytes(&tmp).unwrap().0;
+            y
         };
 
         Ok(ark_bls12_381::G1Affine::new(x, y, false))
@@ -52,38 +76,50 @@ impl ZkCryptoDeserialize for GroupAffine<ark_bls12_381::g1::Parameters> {
 
 impl ZkCryptoDeserialize for GroupAffine<ark_bls12_381::g2::Parameters> {
     fn deserialize_zk_crypto(bytes: &[u8]) -> anyhow::Result<Self> {
-        let xc0 = {
+        let g2 = bls12_381_plus::G2Affine::from_compressed(bytes.try_into().unwrap()).unwrap();
+        let bytes = g2.to_uncompressed();
+
+        Self::deserialize_zk_crypto_uncompressed(&bytes)
+    }
+
+    fn deserialize_zk_crypto_uncompressed(bytes: &[u8]) -> anyhow::Result<Self> {
+        let xc1 = {
             let mut tmp = [0; 48];
             tmp.copy_from_slice(&bytes[0..48]);
 
             // Mask away the flag bits
             tmp[0] &= 0b0001_1111;
 
-            ark_bls12_381::Fq::from(BigInteger384::new(bls12_381_plus::fp::Fp::from_bytes(&tmp).unwrap().0))
+            let mut f = ark_bls12_381::Fq::zero();
+            f.0.0 = bls12_381_plus::fp::Fp::from_bytes(&tmp).unwrap().0;
+            f
         };
 
-        let xc1 = {
+        let xc0 = {
             let mut tmp = [0; 48];
             tmp.copy_from_slice(&bytes[48..96]);
 
-            // Mask away the flag bits
-            tmp[0] &= 0b0001_1111;
-
-            ark_bls12_381::Fq::from(BigInteger384::new(bls12_381_plus::fp::Fp::from_bytes(&tmp).unwrap().0))
+            let mut f = ark_bls12_381::Fq::zero();
+            f.0.0 = bls12_381_plus::fp::Fp::from_bytes(&tmp).unwrap().0;
+            f
         };
 
         // Attempt to obtain the y-coordinate
-        let yc0 = {
+        let yc1 = {
             let mut tmp = [0; 48];
             tmp.copy_from_slice(&bytes[96..144]);
 
-            ark_bls12_381::Fq::from(BigInteger384::new(bls12_381_plus::fp::Fp::from_bytes(&tmp).unwrap().0))
+            let mut f = ark_bls12_381::Fq::zero();
+            f.0.0 = bls12_381_plus::fp::Fp::from_bytes(&tmp).unwrap().0;
+            f
         };
-        let yc1 = {
+        let yc0 = {
             let mut tmp = [0; 48];
             tmp.copy_from_slice(&bytes[144..192]);
 
-            ark_bls12_381::Fq::from(BigInteger384::new(bls12_381_plus::fp::Fp::from_bytes(&tmp).unwrap().0))
+            let mut f = ark_bls12_381::Fq::zero();
+            f.0.0 = bls12_381_plus::fp::Fp::from_bytes(&tmp).unwrap().0;
+            f
         };
 
         Ok(ark_bls12_381::G2Affine::new(
@@ -94,9 +130,8 @@ impl ZkCryptoDeserialize for GroupAffine<ark_bls12_381::g2::Parameters> {
     }
 }
 
-
-pub fn field_scalar_mul_le<T: Field + Zero, B: AsRef<[u8]>>(trg: T, rhs: B) -> T {
-    let mut res = T::zero();
+pub fn gt_scalar_mul_le<T: Field + Zero, B: AsRef<[u8]>>(trg: T, rhs: B) -> T {
+    let mut res = T::one();
     let mut mul = trg;
     // This is a simple double-and-add implementation of group element
     // multiplication, moving from most significant to least
@@ -111,10 +146,14 @@ pub fn field_scalar_mul_le<T: Field + Zero, B: AsRef<[u8]>>(trg: T, rhs: B) -> T
         .flat_map(|byte| (0..8).rev().map(move |i| ((byte >> i) & 1u8) == 1u8))
         .skip(1)
     {
-        res = res.double();
+        let mut y = res.clone();
+
+        res.square_in_place();
+        y = res.clone();
         if bit {
-            res = res.add(&mul)
+            res *= mul;
         }
+
     }
     res
 }
@@ -123,6 +162,9 @@ pub fn curve_scalar_mul_le<T: ProjectiveCurve + Zero, B: AsRef<[u8]>>(trg: T, rh
     let mut res = T::zero();
     let mut mul = trg;
 
+    let y = res.clone();
+    let x = y;
+
     for bit in rhs
         .as_ref()
         .iter()
@@ -130,10 +172,13 @@ pub fn curve_scalar_mul_le<T: ProjectiveCurve + Zero, B: AsRef<[u8]>>(trg: T, rh
         .flat_map(|byte| (0..8).rev().map(move |i| ((byte >> i) & 1u8) == 1u8))
         .skip(1)
     {
-        res = res.double();
+        res.double_in_place();
         if bit {
             res = res.add(&mul)
         }
+
+        let y = res.clone();
+        let x = y;
     }
     res
 }

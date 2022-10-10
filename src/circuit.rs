@@ -1,6 +1,6 @@
 use crate::poseidon::get_poseidon_params;
 use anyhow::anyhow;
-use ark_ff::{to_bytes, BigInteger, BitIteratorLE, Field, PrimeField, ToConstraintField, Zero, Fp12, One, Fp6ParamsWrapper, Fp12ParamsWrapper, Fp2ParamsWrapper, QuadExtField};
+use ark_ff::{to_bytes, BigInteger, BitIteratorLE, Field, PrimeField, ToConstraintField, Zero, Fp12, One, Fp6ParamsWrapper, Fp12ParamsWrapper, Fp2ParamsWrapper, QuadExtField, BigInteger384};
 use ark_groth16::{Groth16, Proof, ProvingKey, VerifyingKey};
 use ark_r1cs_std::fields::fp::FpVar;
 use ark_r1cs_std::prelude::*;
@@ -18,6 +18,7 @@ use ark_std::UniformRand;
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::fmt::Debug;
+use std::hash::Hash;
 use std::ops::{Add, Mul, MulAssign};
 use std::str::FromStr;
 use ark_ec::bls12::Bls12Parameters;
@@ -26,11 +27,11 @@ use ark_ec::{AffineCurve, PairingEngine, ProjectiveCurve};
 use ark_sponge::constraints::CryptographicSpongeVar;
 use ark_sponge::{Absorb, CryptographicSponge};
 use group::Curve as _;
-use ark_serialize::CanonicalDeserialize;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_bls12_381::Bls12_381;
 use ark_nonnative_field::NonNativeFieldVar;
 use ark_r1cs_std::groups::curves::short_weierstrass::ProjectiveVar;
-use crate::utils::{curve_scalar_mul_le, field_scalar_mul_le, GtAbsorbable, gtvar_to_fqvars, Hash2Curve, ZkCryptoDeserialize};
+use crate::utils::{curve_scalar_mul_le, gt_scalar_mul_le, GtAbsorbable, gtvar_to_fqvars, Hash2Curve, ZkCryptoDeserialize, ZkCryptoSerialize};
 use sha2::Sha256;
 use crate::nonnative::*;
 use crate::{Randomness, Plaintext, Ciphertext, PublicKey, SecretKey, Parameters};
@@ -47,10 +48,8 @@ pub struct Circuit<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>>
 }
 
 impl<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>> Circuit<E, P>
-    where E::Fq: PrimeField,
-          E::G2Affine: Hash2Curve + ZkCryptoDeserialize,
-          E::Fq: Absorb,
-          E: GtAbsorbable,
+    where E::Fq: PrimeField + Absorb,
+          E: Hash2Curve + GtAbsorbable,
           ProjectiveVar<P::G1Parameters, FpVar<P::Fp>>: AllocVar<E::G1Projective, E::Fq> + CurveVar<E::G1Projective, E::Fq> + AllocVar<E::G1Projective, P::Fp>,
 {
     pub fn new<I: AsRef<[u8]>, R: Rng + CryptoRng>(
@@ -97,7 +96,7 @@ impl<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>> Circuit<E, P>
         // Note: hash-to-curve algo is `draft-irtf-cfrg-bls-signature-05` which matches to the one used in Drand network,
         // hash function is Sha2 despite the fact that poseidon is used elsewhere to optimize proving performance.
         let gid = {
-            let qid = E::G2Affine::hash(id.as_ref(), tlock::ibe::H2C_DST)?;
+            let qid: E::G2Affine = E::hash(id.as_ref(), tlock::ibe::H2C_DST)?;
             E::pairing(master.clone(), qid)
         };
 
@@ -109,18 +108,18 @@ impl<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>> Circuit<E, P>
             let mut sponge = PoseidonSponge::new(&params.poseidon);
             sponge.absorb(&sigma.0);
             sponge.absorb(&msg);
-            sponge.squeeze_field_elements::<E::Fq>(1).remove(0)
+            sponge.clone().squeeze_bytes(32)
         };
 
-        // 4. Compute U = G*r
+        // 4. Compute U = G^r
         let mut u = curve_scalar_mul_le(
             E::G1Projective::prime_subgroup_generator(),
-            r.into_repr().to_bytes_le()
+            &r
         );
 
         // 5. Compute V = sigma XOR H(rGid)
         let v = {
-            let mut r_gid: E::Fqk = field_scalar_mul_le(gid.clone(), r.into_repr().to_bytes_le());
+            let mut r_gid: E::Fqk = gt_scalar_mul_le(gid.clone(), r);
 
             let mut sponge = PoseidonSponge::new(&params.poseidon);
             sponge.absorb(&E::gt_to_absorbable(&r_gid));
@@ -153,9 +152,12 @@ impl<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>> Circuit<E, P>
         // 1. Compute sigma = V XOR H2(e(rP,private))
         let sigma = {
             let r_gid = E::pairing(ct.u.clone(), sk.clone());
+
             let mut sponge = PoseidonSponge::new(&params.poseidon);
             sponge.absorb(&E::gt_to_absorbable(&r_gid));
-            sponge.squeeze_field_elements::<E::Fq>(1).remove(0)
+            let h_r_gid = sponge.squeeze_field_elements::<E::Fq>(1).remove(0);
+
+            ct.v - h_r_gid
         };
 
         // 2. Compute Msg = W XOR H4(sigma)
@@ -172,10 +174,9 @@ impl<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>> Circuit<E, P>
             let mut sponge = PoseidonSponge::new(&params.poseidon);
             sponge.absorb(&sigma);
             sponge.absorb(&msg);
-            let r = sponge.squeeze_field_elements::<E::Fq>(1).remove(0);
             curve_scalar_mul_le(
                 E::G1Projective::prime_subgroup_generator(),
-                r.into_repr().to_bytes_le()
+                &sponge.squeeze_bytes(32)
             )
         };
         assert_eq!(ct.u, r_g);
@@ -198,8 +199,8 @@ impl<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>> Circuit<E, P>
             sponge.absorb(&sigma)?;
             sponge.absorb(&msg)?;
             sponge
-                .squeeze_field_elements(1)
-                .and_then(|r| Ok(r[0].clone()))?.to_bits_le()?
+                .squeeze_bytes(32)?
+                .into_iter().flat_map(|b| b.to_bits_le().unwrap()).collect::<Vec<_>>()
         };
 
         // 4. Compute U = G*r
@@ -210,12 +211,12 @@ impl<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>> Circuit<E, P>
         // 5. Compute V = sigma XOR H(rGid)
         let v = {
             let r_gid = {
-                let mut res = Fp12Var::<P::Fp12Params>::zero();
+                let mut res = Fp12Var::<P::Fp12Params>::one();
                 let mut mul = gid;
                 for bit in r.into_iter() {
-                    let tmp = res.clone() + &mul;
+                    let tmp = res.clone() * &mul;
                     res = bit.select(&tmp, &res)?;
-                    mul.double_in_place()?;
+                    mul.square_in_place()?;
                 }
                 res
             };
@@ -278,10 +279,8 @@ impl<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>> Circuit<E, P>
 }
 
 impl<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>> ConstraintSynthesizer<E::Fq> for Circuit<E, P>
-    where E::Fq: PrimeField,
-          E::G2Affine: Hash2Curve + ZkCryptoDeserialize,
-          E::Fq: Absorb,
-          E: GtAbsorbable,
+    where E::Fq: PrimeField + Absorb,
+          E: Hash2Curve + GtAbsorbable,
           ProjectiveVar<P::G1Parameters, FpVar<P::Fp>>: AllocVar<E::G1Projective, E::Fq> + CurveVar<E::G1Projective, E::Fq> + AllocVar<E::G1Projective, P::Fp>,
           E::Fqk: Borrow<QuadExtField<Fp12ParamsWrapper<P::Fp12Params>>>,
 {
@@ -481,7 +480,7 @@ mod tests {
     use crate::poseidon;
     use super::*;
 
-    use ark_bls12_377::{G1Projective as ProjectiveEngine, Fq, Fr, Fq12, G1Affine};
+    use ark_bls12_377::{G1Projective as ProjectiveEngine, Fq, Fr, Fq12, G1Affine, Bls12_377};
     use ark_bw6_761::BW6_761;
 
     use ark_ff::{Field, Zero};
@@ -491,35 +490,85 @@ mod tests {
     use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
     use sha2::Digest;
 
-    // #[test]
-    // fn test_decrypt() {
-    //     let mut rng = test_rng();
-    //     let bytes = [1, 2, 3];
-    //     let msg = Fq::from_random_bytes(&bytes).unwrap();
-    //
-    //     let params = Parameters::<ProjectiveEngine> {
-    //         poseidon: get_poseidon_params::<ProjectiveEngine>(2),
-    //     };
-    //     let pk = {
-    //         let bytes = hex::decode("8200fc249deb0148eb918d6e213980c5d01acd7fc251900d9260136da3b54836ce125172399ddc69c4e3e11429b62c11").unwrap();
-    //         let tmp = bls12_381_plus::G1Affine::from_compressed((&*bytes).try_into().unwrap()).unwrap();
-    //
-    //         g1_from_uncompressed_bytes(&tmp.to_uncompressed()).unwrap()
-    //     };
-    //     let sigma = Randomness::<G1Projective>::rand(&mut rng);
-    //
-    //     let round_number = 1000u64;
-    //     let id = {
-    //         let mut hash = sha2::Sha256::new();
-    //         hash.update(&round_number.to_be_bytes());
-    //         &hash.finalize().to_vec()[0..32]
-    //     };
-    //
-    //     let ct = EncryptCircuit::encrypt(&pk, id, &msg, &params, &mut rng).unwrap();
-    // }
+    #[test]
+    fn test_decrypt() {
+        type TestCircuit = Circuit::<Bls12_381, ark_bls12_381::Parameters>;
+        let mut rng = test_rng();
+        let bytes = [1, 2, 3];
+        let msg = ark_bls12_381::Fq::from_random_bytes(&bytes).unwrap();
+
+        let params = Parameters::<ark_bls12_381::G1Projective>::default();
+        let pk = {
+            let bytes = hex::decode("8200fc249deb0148eb918d6e213980c5d01acd7fc251900d9260136da3b54836ce125172399ddc69c4e3e11429b62c11").unwrap();
+            ark_bls12_381::G1Affine::deserialize_zk_crypto(&bytes).unwrap()
+        };
+
+        let round_number = 1000u64;
+        let id = {
+            let mut hash = sha2::Sha256::new();
+            hash.update(&round_number.to_be_bytes());
+            &hash.finalize().to_vec()[0..32]
+        };
+
+        let ct = TestCircuit::encrypt(&pk, id, &msg, &params, &mut rng).unwrap();
+
+        let sk = {
+            let bytes = hex::decode("a4721e6c3eafcd823f138cd29c6c82e8c5149101d0bb4bafddbac1c2d1fe3738895e4e21dd4b8b41bf007046440220910bb1cdb91f50a84a0d7f33ff2e8577aa62ac64b35a291a728a9db5ac91e06d1312b48a376138d77b4d6ad27c24221afe").unwrap();
+            ark_bls12_381::G2Affine::deserialize_zk_crypto(&bytes).unwrap()
+        };
+
+        let pt = TestCircuit::decrypt(&sk, &ct, &params).unwrap();
+        // assert_eq!(pt, msg)
+    }
 
     #[test]
-    fn test_circuit() {
+    fn test_circuit_377() {
+        type TestCircuit = Circuit::<Bls12_377, ark_bls12_377::Parameters>;
+        let mut rng = test_rng();
+        let bytes = [1, 2, 3];
+        let msg = ark_bls12_377::Fq::from_random_bytes(&bytes).unwrap();
+
+        let (master, priv_key) = {
+            let sk = ark_bls12_377::Fr::rand(&mut rng);
+            let mut master = {
+                let mut g = ark_bls12_377::G1Projective::prime_subgroup_generator();
+                g.mul_assign(sk.clone());
+                g
+            };
+            let msg_hash = ark_bls12_377::G2Projective::prime_subgroup_generator();
+            let signature = {
+                let mut h = msg_hash;
+                h.mul_assign(sk);
+                h
+            };
+            (master.into_affine(), signature.into_affine())
+        };
+
+        let params = Parameters::<ark_bls12_377::G1Projective>::default();
+
+        let round_number = 1000u64;
+        let id = {
+            let mut hash = sha2::Sha256::new();
+            hash.update(&round_number.to_be_bytes());
+            &hash.finalize().to_vec()[0..32]
+        };
+
+        let circuit = Circuit::<ark_bls12_377::Bls12_377, ark_bls12_377::Parameters>::new(
+            master.clone(),
+            &id,
+            msg.clone().into(),
+            &mut rng,
+        ).unwrap();
+
+        let (pk, _vk) = Groth16::<BW6_761>::setup(circuit, &mut rng).unwrap();
+
+        let circuit = Circuit::<ark_bls12_377::Bls12_377, ark_bls12_377::Parameters>::new(master, id, msg.clone().into(), &mut rng).unwrap();
+        let ct = circuit.resulted_ciphertext.clone();
+        let _proof = Groth16::prove(&pk, circuit, &mut rng).unwrap();
+    }
+
+    #[test]
+    fn test_nonnative_circuit() {
         let mut rng = test_rng();
         let bytes = [1, 2, 3];
         let msg = ark_bls12_381::Fq::from_random_bytes(&bytes).unwrap();
