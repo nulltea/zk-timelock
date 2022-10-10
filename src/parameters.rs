@@ -1,5 +1,4 @@
 use crate::{poseidon, Parameters};
-use ark_ec::ProjectiveCurve;
 use json::JsonValue;
 use json::{array, object};
 use lazy_static::lazy_static;

@@ -6,19 +6,18 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.58"
 ark-ff = { version = "^0.3.0", default-features = false }
-ark-ec = { version = "^0.3.0", default-features = false }
+ark-ec = { version = "^0.3.0", default-features = false}
 ark-std = { version = "^0.3.0", default-features = false }
 ark-snark = { version = "^0.3.0", default-features = false }
-ark-r1cs-std = { version = "^0.3.0", default-features = false, optional = true }
-ark-relations = { version = "^0.3.0", default-features = false, optional = true}
-ark-groth16 = { version = "^0.3.0", features = ["r1cs", "std"] }
+ark-r1cs-std = { version = "^0.3.0", default-features = false }
+ark-relations = { version = "^0.3.0", default-features = false }
+# ark-groth16 = { version = "^0.3.0", features = ["r1cs", "std"] }
+ark-gemini = { git = "https://github.com/arkworks-rs/gemini"  }
 ark-sponge = { version = "^0.3.0" , features = ["r1cs"] }
 ark-serialize = { version = "^0.3.0", default-features = false }
-ark-nonnative-field = { version = "^0.3.0", default-features = false }
 ark-bls12-381 = { version = "^0.3.0", features = [ "curve", "scalar_field" ] }
 ark-bls12-377 = { version = "0.3.0" , features = [ "r1cs" ] }
 ark-bw6-761 = "0.3.0"
-
 
 pretty_env_logger = "0.4.0"
 tracing = { version = "0.1", default-features = false, features = [ "attributes" ] }
@@ -34,11 +33,25 @@ bls12_381_plus = { version = "0.7.0", features = ["groups", "expose-fields"] }
 tlock = {path = "../rs-drand-tlock/tlock"}
 
 [features]
-default = [ "std", "parallel", "r1cs" ]
-std = [ "ark-ff/std", "ark-ec/std", "ark-std/std", "ark-relations/std", "ark-serialize/std" ]
-r1cs = [ "ark-relations", "ark-r1cs-std" ]
-parallel = [ "std", "ark-ff/parallel", "ark-ec/parallel", "ark-std/parallel"]
-
+std = [ "ark-std/std", "ark-ff/std", "ark-ec/std", "ark-gemini/std"]
+parallel = [ "ark-ff/parallel", "ark-ec/parallel", "ark-std/parallel", "ark-gemini/parallel" ]
 
 [profile.dev.package."*"]
 opt-level = 3
+
+[patch.crates-io]
+ark-r1cs-std = { git = "https://github.com/arkworks-rs/r1cs-std" }
+ark-std = { git = "https://github.com/arkworks-rs/std" }
+# ark-groth16 = { git = "https://github.com/arkworks-rs/groth16", branch = "sync-algebra" }
+ark-gemini = { git = "https://github.com/arkworks-rs/gemini" }
+ark-bls12-381 = { git = "https://github.com/arkworks-rs/curves" }
+ark-bls12-377 = { git = "https://github.com/arkworks-rs/curves" }
+ark-bw6-761 = { git = "https://github.com/arkworks-rs/curves" }
+ark-relations = {git = "https://github.com/arkworks-rs/snark", branch = "sync-algebra" }
+ark-snark = { git = "https://github.com/arkworks-rs/snark", branch = "sync-algebra" }
+ark-ff = { git = "https://github.com/arkworks-rs/algebra" }
+ark-ec = { git = "https://github.com/arkworks-rs/algebra" }
+ark-poly = { git = "https://github.com/arkworks-rs/algebra" }
+ark-sponge = { git = "https://github.com/arkworks-rs/sponge" }
+ark-serialize = { git = "https://github.com/arkworks-rs/algebra" }
+ark-crypto-primitives = { git = "https://github.com/arkworks-rs/crypto-primitives" }
