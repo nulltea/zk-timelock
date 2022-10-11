@@ -21,6 +21,7 @@ ark-bw6-761 = "0.3.0"
 
 pretty_env_logger = "0.4.0"
 tracing = { version = "0.1", default-features = false, features = [ "attributes" ] }
+tracing-subscriber = { version = "0.3.3", features = ["env-filter"] }
 
 json = "0.12.4"
 lazy_static = "^1.4.0"
@@ -31,6 +32,13 @@ sha2 = "0.9"
 group = "0.12"
 bls12_381_plus = { version = "0.7.0", features = ["groups", "expose-fields"] }
 tlock = {path = "../rs-drand-tlock/tlock"}
+
+[dev-dependencies]
+criterion = "0.4"
+
+[[bench]]
+harness = false
+name = "ibe_benchmark"
 
 [features]
 default = [ "std", "parallel", "r1cs" ]
