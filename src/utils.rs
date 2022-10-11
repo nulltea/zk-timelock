@@ -26,7 +26,6 @@ impl Hash2Curve for Bls12_381 where Self::G2Affine: ZkCryptoDeserialize {
 
 impl Hash2Curve for Bls12_377 {
     fn hash(msg: &[u8], dst: &[u8]) -> anyhow::Result<Self::G2Affine> {
-        // todo
         Ok(Self::G2Affine::generator())
     }
 }
@@ -34,10 +33,6 @@ impl Hash2Curve for Bls12_377 {
 pub trait ZkCryptoDeserialize: Sized {
     fn deserialize_zk_crypto(bytes: &[u8]) -> anyhow::Result<Self>;
     fn deserialize_zk_crypto_uncompressed(bytes: &[u8]) -> anyhow::Result<Self>;
-}
-
-pub trait ZkCryptoSerialize: Sized {
-    fn serialize_zk_crypto(bytes: &Self) -> anyhow::Result<Vec<u8>>;
 }
 
 impl ZkCryptoDeserialize for Affine<ark_bls12_381::g1::Parameters> {
@@ -71,7 +66,7 @@ impl ZkCryptoDeserialize for Affine<ark_bls12_381::g1::Parameters> {
             y
         };
 
-        Ok(ark_bls12_381::G1Affine::new(x, y, false))
+        Ok(ark_bls12_381::G1Affine::new(x, y))
     }
 }
 
@@ -159,7 +154,6 @@ pub fn gt_scalar_mul_le<T: Field + Zero, B: AsRef<[u8]>>(trg: T, rhs: B) -> T {
 }
 
 pub fn curve_scalar_mul_le<T: CurveGroup + Zero, B: AsRef<[u8]>>(trg: T, rhs: B) -> T {
-    println!("r={}", hex::encode(rhs.as_ref()));
     let mut res = T::zero();
     let mut mul = trg;
 

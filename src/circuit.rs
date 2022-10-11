@@ -30,10 +30,12 @@ use group::Curve as _;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_bls12_381::Bls12_381;
 use ark_r1cs_std::groups::curves::short_weierstrass::ProjectiveVar;
-use crate::utils::{curve_scalar_mul_le, gt_scalar_mul_le, GtAbsorbable, gtvar_to_fqvars, Hash2Curve, ZkCryptoDeserialize, ZkCryptoSerialize};
+use crate::utils::{curve_scalar_mul_le, gt_scalar_mul_le, GtAbsorbable, gtvar_to_fqvars, Hash2Curve, ZkCryptoDeserialize};
 use sha2::Sha256;
 use crate::nonnative::*;
 use crate::{Randomness, Plaintext, Ciphertext, PublicKey, SecretKey, Parameters};
+
+const R_BYTES_SQUEEZE: usize = 16;
 
 pub struct Circuit<E: Pairing, P: Bls12Parameters<Fp = <E::G1 as CurveGroup>::BaseField>>
     where <E::G1 as CurveGroup>::BaseField: PrimeField
@@ -54,7 +56,7 @@ impl<E: Pairing, P: Bls12Parameters<Fp = <E::G1 as CurveGroup>::BaseField>> Circ
 {
     type Fq = <E::G1 as CurveGroup>::BaseField;
 
-    pub fn new<I: AsRef<[u8]>, R: Rng + CryptoRng>(
+    pub fn new<I: AsRef<[u8]>, R: Rng>(
         master: PublicKey<E>,
         id: I,
         msg: Plaintext<E::G1>,
@@ -76,18 +78,18 @@ impl<E: Pairing, P: Bls12Parameters<Fp = <E::G1 as CurveGroup>::BaseField>> Circ
         })
     }
 
-    pub fn encrypt<I: AsRef<[u8]>, R: Rng + CryptoRng>(
+    pub fn encrypt<I: AsRef<[u8]>, R: Rng>(
         master: &PublicKey<E>,
         id: I,
         msg: &Plaintext<E::G1>,
-        params: &Parameters<E::G1>,
         rng: &mut R,
     ) -> anyhow::Result<Ciphertext<E::G1>> {
-        let (_, _, ct) = Self::encrypt_inner(master, id, msg, params, rng)?;
+        let params = Parameters::<E::G1>::default();
+        let (_, _, ct) = Self::encrypt_inner(master, id, msg, &params, rng)?;
         Ok(ct)
     }
 
-    fn encrypt_inner<I: AsRef<[u8]>, R: Rng + CryptoRng>(
+    fn encrypt_inner<I: AsRef<[u8]>, R: Rng>(
         master: &PublicKey<E>,
         id: I,
         msg: &Plaintext<E::G1>,
@@ -100,7 +102,7 @@ impl<E: Pairing, P: Bls12Parameters<Fp = <E::G1 as CurveGroup>::BaseField>> Circ
         let gid = {
             let qid: E::G2Affine = E::hash(id.as_ref(), tlock::ibe::H2C_DST)?;
             E::pairing(master.clone(), qid)
-        };
+        }.0;
 
         // 2. Derive random sigma
         let sigma = Randomness::<E::G1>::rand(rng);
@@ -110,16 +112,18 @@ impl<E: Pairing, P: Bls12Parameters<Fp = <E::G1 as CurveGroup>::BaseField>> Circ
             let mut sponge = PoseidonSponge::new(&params.poseidon);
             sponge.absorb(&sigma.0);
             sponge.absorb(&msg);
-            sponge.squeeze_field_elements::<E::ScalarField>(1).remove(0)
+            sponge.clone().squeeze_bytes(R_BYTES_SQUEEZE)
         };
 
-        // 4. Compute U = G^r
-        let mut u = E::G1::generator();
-        u.mul_assign(r);
+        // 4. Compute U = G*r
+        let mut u = curve_scalar_mul_le(
+            E::G1::generator(),
+            &r
+        );
 
         // 5. Compute V = sigma XOR H(rGid)
         let v = {
-            let mut r_gid: E::TargetField = gt_scalar_mul_le(gid.clone(), r.into_bigint().to_bytes_le());
+            let mut r_gid: E::TargetField = gt_scalar_mul_le(gid.clone(), &r);
 
             let mut sponge = PoseidonSponge::new(&params.poseidon);
             sponge.absorb(&E::gt_to_absorbable(&r_gid));
@@ -147,17 +151,16 @@ impl<E: Pairing, P: Bls12Parameters<Fp = <E::G1 as CurveGroup>::BaseField>> Circ
     pub fn decrypt(
         sk: &SecretKey<E>,
         ct: &Ciphertext<E::G1>,
-        params: &Parameters<E::G1>,
     ) -> anyhow::Result<Plaintext<E::G1>> {
+        let params = Parameters::<E::G1>::default();
+
         // 1. Compute sigma = V XOR H2(e(rP,private))
         let sigma = {
-            let r_gid = E::pairing(ct.u.clone(), sk.clone());
+            let r_gid = E::pairing(ct.u.clone(), sk.clone()).0;
 
             let mut sponge = PoseidonSponge::new(&params.poseidon);
             sponge.absorb(&E::gt_to_absorbable(&r_gid));
-            let h_r_gid = sponge.squeeze_field_elements::<<E::G1 as CurveGroup>::BaseField>(1).remove(0);
-
-            ct.v - h_r_gid
+            sponge.squeeze_field_elements::<<E::G1 as CurveGroup>::BaseField>(1).remove(0)
         };
 
         // 2. Compute Msg = W XOR H4(sigma)
@@ -174,10 +177,8 @@ impl<E: Pairing, P: Bls12Parameters<Fp = <E::G1 as CurveGroup>::BaseField>> Circ
             let mut sponge = PoseidonSponge::new(&params.poseidon);
             sponge.absorb(&sigma);
             sponge.absorb(&msg);
-            let r = sponge.squeeze_field_elements::<E::ScalarField>(1).remove(0);
-            let mut u = E::G1::generator();
-            u.mul_assign(r);
-            u
+            let r = sponge.squeeze_bytes(R_BYTES_SQUEEZE);
+            curve_scalar_mul_le(E::G1::generator(), &r)
         };
         assert_eq!(ct.u, r_g);
 
@@ -199,8 +200,8 @@ impl<E: Pairing, P: Bls12Parameters<Fp = <E::G1 as CurveGroup>::BaseField>> Circ
             sponge.absorb(&sigma)?;
             sponge.absorb(&msg)?;
             sponge
-                .squeeze_field_elements(1)
-                .and_then(|r| Ok(r[0].clone()))?.to_bits_le()?
+                .squeeze_bytes(R_BYTES_SQUEEZE)?
+                .into_iter().flat_map(|b| b.to_bits_le().unwrap()).collect::<Vec<_>>()
         };
 
         // 4. Compute U = G*r
@@ -211,12 +212,12 @@ impl<E: Pairing, P: Bls12Parameters<Fp = <E::G1 as CurveGroup>::BaseField>> Circ
         // 5. Compute V = sigma XOR H(rGid)
         let v = {
             let r_gid = {
-                let mut res = Fp12Var::<P::Fp12Params>::zero();
+                let mut res = Fp12Var::<P::Fp12Config>::one();
                 let mut mul = gid;
                 for bit in r.into_iter() {
-                    let tmp = res.clone() + &mul;
+                    let tmp = res.clone() * &mul;
                     res = bit.select(&tmp, &res)?;
-                    mul.double_in_place()?;
+                    mul.square_in_place()?;
                 }
                 res
             };
@@ -281,14 +282,14 @@ impl<E: Pairing, P: Bls12Parameters<Fp = <E::G1 as CurveGroup>::BaseField>> Circ
 impl<E: Pairing, P: Bls12Parameters<Fp = <E::G1 as CurveGroup>::BaseField>> ConstraintSynthesizer<<E::G1 as CurveGroup>::BaseField> for Circuit<E, P>
     where <E::G1 as CurveGroup>::BaseField: PrimeField + Absorb,
           E: Hash2Curve + GtAbsorbable,
+          E::TargetField: Borrow<QuadExtField<Fp12ConfigWrapper<<P as Bls12Parameters>::Fp12Config>>>,
           ProjectiveVar<P::G1Parameters, FpVar<P::Fp>>: AllocVar<E::G1, <E::G1 as CurveGroup>::BaseField> + CurveVar<E::G1, <E::G1 as CurveGroup>::BaseField> + AllocVar<E::G1, P::Fp>,
-          E::TargetField: Borrow<QuadExtField<Fp12ConfigWrapper<P::Fp12Config>>>,
 {
     fn generate_constraints(
         self,
         cs: ConstraintSystemRef<<E::G1 as CurveGroup>::BaseField>,
     ) -> Result<(), SynthesisError> {
-        let gid = Fp12Var::<P::Fp12Params>::new_input(ns!(cs, "gid"), || Ok(self.gid))?;
+        let gid = Fp12Var::<P::Fp12Config>::new_input(ns!(cs, "gid"), || Ok(self.gid))?;
         let message = FpVar::<<E::G1 as CurveGroup>::BaseField>::new_witness(ns!(cs, "plaintext"), || {
             Ok(self.msg)
         })?;
@@ -312,7 +313,7 @@ pub struct NonnativeCircuit<PC: CurveGroup>
 impl<PC: CurveGroup> NonnativeCircuit<PC>
     where PC::BaseField: PrimeField
 {
-    pub fn new<I: AsRef<[u8]>, R: Rng + CryptoRng>(
+    pub fn new<I: AsRef<[u8]>, R: Rng>(
         master: PublicKey<Bls12_381>,
         id: I,
         msg: Plaintext<ark_bls12_381::G1Projective>,
@@ -346,6 +347,13 @@ impl<PC: CurveGroup> NonnativeCircuit<PC>
         vec![]
     }
 
+    pub fn decrypt(
+        sk: &SecretKey<Bls12_381>,
+        ct: &Ciphertext<ark_bls12_381::G1Projective>,
+    ) -> anyhow::Result<Plaintext<ark_bls12_381::G1Projective>> {
+        Circuit::<Bls12_381, ark_bls12_381::Parameters>::decrypt(sk, ct)
+    }
+
     pub(crate) fn verify_encryption(
         &self,
         cs: ConstraintSystemRef<PC::BaseField>,
@@ -375,8 +383,8 @@ impl<PC: CurveGroup> NonnativeCircuit<PC>
             sponge.absorb(&sigma.to_constraint_field().unwrap())?;
             sponge.absorb(&msg.to_constraint_field().unwrap())?;
             sponge
-                .squeeze_nonnative_field_elements::<ark_bls12_381::Fq>(1)
-                .and_then(|r| Ok(r.0[0].clone()))?.to_bits_le()?
+                .squeeze_bytes(R_BYTES_SQUEEZE)?
+                .into_iter().flat_map(|b| b.to_bits_le().unwrap()).collect::<Vec<_>>()
         };
 
         // 4. Compute U = G*r
@@ -480,8 +488,9 @@ mod tests {
     use crate::poseidon;
     use super::*;
 
-    use ark_bls12_377::{G1Projective as ProjectiveEngine, Fq, Fr, Fq12, G1Affine};
+    use ark_bls12_377::{G1Projective as ProjectiveEngine, Fq, Fr, Fq12, G1Affine, Bls12_377};
     use ark_bw6_761::BW6_761;
+    use ark_ec::AffineRepr;
 
     use ark_ff::{Field, Zero};
     // use ark_groth16::Groth16;
@@ -493,37 +502,6 @@ mod tests {
     #[test]
     fn test_decrypt() {
         type TestCircuit = Circuit::<Bls12_381, ark_bls12_381::Parameters>;
-        let mut rng = test_rng();
-        let bytes = [1, 2, 3];
-        let msg = ark_bls12_381::Fq::from_random_bytes(&bytes).unwrap();
-
-        let params = Parameters::<ark_bls12_381::G1Projective>::default();
-        let pk = {
-            let bytes = hex::decode("8200fc249deb0148eb918d6e213980c5d01acd7fc251900d9260136da3b54836ce125172399ddc69c4e3e11429b62c11").unwrap();
-            ark_bls12_381::G1Affine::deserialize_zk_crypto(&bytes).unwrap()
-        };
-
-        let round_number = 1000u64;
-        let id = {
-            let mut hash = sha2::Sha256::new();
-            hash.update(&round_number.to_be_bytes());
-            &hash.finalize().to_vec()[0..32]
-        };
-
-        let ct = TestCircuit::encrypt(&pk, id, &msg, &params, &mut rng).unwrap();
-
-        let sk = {
-            let bytes = hex::decode("a4721e6c3eafcd823f138cd29c6c82e8c5149101d0bb4bafddbac1c2d1fe3738895e4e21dd4b8b41bf007046440220910bb1cdb91f50a84a0d7f33ff2e8577aa62ac64b35a291a728a9db5ac91e06d1312b48a376138d77b4d6ad27c24221afe").unwrap();
-            ark_bls12_381::G2Affine::deserialize_zk_crypto(&bytes).unwrap()
-        };
-
-        let pt = TestCircuit::decrypt(&sk, &ct, &params).unwrap();
-        assert_eq!(pt, msg)
-    }
-
-
-    #[test]
-    fn test_circuit() {
         let mut rng = test_rng();
         let bytes = [1, 2, 3];
         let msg = ark_bls12_377::Fq::from_random_bytes(&bytes).unwrap();
@@ -547,37 +525,6 @@ mod tests {
 
         let circuit = Circuit::<ark_bls12_377::Bls12_377, ark_bls12_377::Parameters>::new(master, id, msg.clone().into(), &mut rng).unwrap();
         let ct = circuit.resulted_ciphertext.clone();
-        // let _proof = Groth16::prove(&pk, circuit, &mut rng).unwrap();
-    }
-
-    #[test]
-    fn test_nonnative_circuit() {
-        let mut rng = test_rng();
-        let bytes = [1, 2, 3];
-        let msg = ark_bls12_381::Fq::from_random_bytes(&bytes).unwrap();
-
-        let master: _ = {
-            let bytes = hex::decode("8200fc249deb0148eb918d6e213980c5d01acd7fc251900d9260136da3b54836ce125172399ddc69c4e3e11429b62c11").unwrap();
-            ark_bls12_381::G1Affine::deserialize_zk_crypto(&bytes).unwrap()
-        };
-        let round_number = 1000u64;
-        let id = {
-            let mut hash = sha2::Sha256::new();
-            hash.update(&round_number.to_be_bytes());
-            &hash.finalize().to_vec()[0..32]
-        };
-
-        let circuit = NonnativeCircuit::<ark_bls12_377::G1Projective>::new(
-            master.clone(),
-            &id,
-            msg.clone().into(),
-            &mut rng,
-        ).unwrap();
-
-        // let (pk, _vk) = Groth16::<BW6_761>::setup(circuit, &mut rng).unwrap();
-
-        // let circuit = EncryptCircuit::new(master, id, msg.clone().into(), params.clone(), &mut rng).unwrap();
-        // let ct = circuit.resulted_ciphertext.clone();
         // let _proof = Groth16::prove(&pk, circuit, &mut rng).unwrap();
     }
 }

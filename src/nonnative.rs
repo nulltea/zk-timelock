@@ -212,10 +212,22 @@ impl<T: PrimeField, B: PrimeField> Fp2Var<T, B>
         Ok(Self::new(c0, c1))
     }
 
+    fn square(&self) -> Result<Self, SynthesisError> {
+        let c0 = self.c0.square()?;
+        let c1 = self.c1.square()?;
+        Ok(Self::new(c0, c1))
+    }
+
     fn add(&self, other: &Self) -> Self {
         let mut c0 = &self.c0 + &other.c0;
         let mut c1 = &self.c1 + &other.c1;
         Fp2Var::new(c0, c1)
+    }
+
+    pub fn mul(&self, other: &Self) -> Self {
+        let mut c0 = &self.c0 * &other.c0;
+        let mut c1 = &self.c1 * &other.c1;
+        Self::new(c0, c1)
     }
 }
 
@@ -283,10 +295,24 @@ impl<T: PrimeField, B: PrimeField> Fp6Var<T, B>
         Ok(Self::new(c0, c1, c2))
     }
 
+    fn square(&self) -> Result<Self, SynthesisError> {
+        let c0 = self.c0.square()?;
+        let c1 = self.c1.square()?;
+        let c2 = self.c2.square()?;
+        Ok(Self::new(c0, c1, c2))
+    }
+
     fn add(&self, other: &Self) -> Self {
         let mut c0 = self.c0.add(&other.c0);
         let mut c1 = self.c1.add(&other.c1);
         let mut c2 = self.c2.add(&other.c2);
+        Self::new(c0, c1, c2)
+    }
+
+    pub fn mul(&self, other: &Self) -> Self {
+        let mut c0 = self.c0.mul(&other.c0);
+        let mut c1 = self.c1.mul(&other.c1);
+        let mut c2 = self.c2.mul(&other.c2);
         Self::new(c0, c1, c2)
     }
 }
@@ -358,8 +384,21 @@ impl<T: PrimeField, B: PrimeField> Fp12Var<T, B>
     }
 
     #[tracing::instrument(target = "r1cs", skip(self))]
+    fn square(&self) -> Result<Self, SynthesisError> {
+        let c0 = self.c0.square()?;
+        let c1 = self.c1.square()?;
+        Ok(Self::new(c0, c1))
+    }
+
+    #[tracing::instrument(target = "r1cs", skip(self))]
     pub(crate) fn double_in_place(&mut self) -> Result<(), SynthesisError> {
         *self = self.double()?;
+        Ok(())
+    }
+
+    #[tracing::instrument(target = "r1cs", skip(self))]
+    pub(crate) fn square_in_place(&mut self) -> Result<(), SynthesisError> {
+        *self = self.square()?;
         Ok(())
     }
 
@@ -370,18 +409,25 @@ impl<T: PrimeField, B: PrimeField> Fp12Var<T, B>
         Self::new(c0, c1)
     }
 
+    #[tracing::instrument(target = "r1cs", skip(self))]
+    pub fn mul(&self, other: &Self) -> Self {
+        let mut c0 = self.c0.mul(&other.c0);
+        let mut c1 = self.c1.mul(&other.c1);
+        Self::new(c0, c1)
+    }
+
     #[tracing::instrument(target = "r1cs", skip(bits))]
     pub fn scalar_mul_le<'a>(
         &self,
         bits: impl Iterator<Item = &'a Boolean<B>>,
     ) -> Result<Self, SynthesisError> {
-        let mut res = Self::zero();
+        let mut res = Self::one();
         let mut mul = (*self).clone();
 
         for bit in bits {
-            let tmp = res.clone().add(&mul);
+            let tmp = res.clone().mul(&mul);
             res = bit.select(&tmp, &res)?;
-            mul.double_in_place()?;
+            mul.square_in_place()?;
         }
         Ok(res)
     }
