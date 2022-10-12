@@ -5,6 +5,7 @@ mod parameters;
 pub mod poseidon;
 pub mod utils;
 mod nonnative;
+pub mod yata_127;
 
 pub use crate::circuit::*;
 

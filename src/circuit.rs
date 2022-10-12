@@ -289,11 +289,11 @@ impl<E: Pairing, P: Bls12Parameters<Fp = <E::G1 as CurveGroup>::BaseField>> Cons
         self,
         cs: ConstraintSystemRef<<E::G1 as CurveGroup>::BaseField>,
     ) -> Result<(), SynthesisError> {
-        let gid = Fp12Var::<P::Fp12Config>::new_input(ns!(cs, "gid"), || Ok(self.gid))?;
+        let gid = Fp12Var::<P::Fp12Config>::new_witness(ns!(cs, "gid"), || Ok(self.gid))?;
         let message = FpVar::<<E::G1 as CurveGroup>::BaseField>::new_witness(ns!(cs, "plaintext"), || {
             Ok(self.msg)
         })?;
-        let ciphertext = self.ciphertext_var(cs.clone(), AllocationMode::Input)?;
+        let ciphertext = self.ciphertext_var(cs.clone(), AllocationMode::Witness)?;
 
         self.verify_encryption(cs.clone(), gid, &message, &ciphertext)
     }

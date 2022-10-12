@@ -32,9 +32,12 @@ sha2 = "0.9"
 group = "0.12"
 bls12_381_plus = { version = "0.7.0", features = ["groups", "expose-fields"] }
 tlock = {path = "../rs-drand-tlock/tlock"}
+itertools = "0.10"
 
 [dev-dependencies]
-criterion = "0.4"
+ark-relations = { version = "^0.3.0", default-features = false }
+ark-serialize = { version = "^0.3.0", default-features = false }
+ark-algebra-test-templates = { version = "^0.3.0", default-features = false }
 
 [[bench]]
 harness = false
@@ -48,6 +51,7 @@ parallel = [ "ark-ff/parallel", "ark-ec/parallel", "ark-std/parallel", "ark-gemi
 opt-level = 3
 
 [patch.crates-io]
+ark-test-curves = { git = "https://github.com/arkworks-rs/algebra" }
 ark-r1cs-std = { git = "https://github.com/arkworks-rs/r1cs-std" }
 ark-std = { git = "https://github.com/arkworks-rs/std" }
 # ark-groth16 = { git = "https://github.com/arkworks-rs/groth16", branch = "sync-algebra" }
@@ -62,4 +66,5 @@ ark-ec = { git = "https://github.com/arkworks-rs/algebra" }
 ark-poly = { git = "https://github.com/arkworks-rs/algebra" }
 ark-sponge = { git = "https://github.com/arkworks-rs/sponge" }
 ark-serialize = { git = "https://github.com/arkworks-rs/algebra" }
+ark-algebra-test-templates = { git = "https://github.com/arkworks-rs/algebra" }
 ark-crypto-primitives = { git = "https://github.com/arkworks-rs/crypto-primitives" }
