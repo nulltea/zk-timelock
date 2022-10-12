@@ -8,8 +8,7 @@ use ark_groth16::Groth16;
 use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
 use ark_std::{test_rng, UniformRand};
 use sha2::Digest;
-use tracing::{warn_span, info_span};
-use tracing::log::warn;
+use tracing::{warn_span, info_span, warn};
 use tracing_subscriber::fmt::format;
 use tracing_subscriber::fmt::format::FmtSpan;
 use zk_tlock::{Circuit, NonnativeCircuit, Parameters};
@@ -31,8 +30,7 @@ fn test_groth16_native_bls12_377() {
         let msg_hash = ark_bls12_377::G2Projective::generator();
         let signature = {
             let mut h = msg_hash;
-            h.mul_assign(sk);
-            h
+            h.mul_bigint(sk.0)
         };
         (master.into_affine(), signature.into_affine())
     };
@@ -64,11 +62,11 @@ fn test_groth16_native_bls12_377() {
         Groth16::prove(&pk, circuit, &mut rng)
     ).unwrap();
 
-    let pt = warn_span!("decrypt message").in_scope(||
-        TestCircuit::decrypt(&priv_key, &ct)
-    ).unwrap();
-
-    assert_eq!(msg, pt)
+    // let pt = warn_span!("decrypt message").in_scope(||
+    //     TestCircuit::decrypt(&priv_key, &ct)
+    // ).unwrap();
+    //
+    // assert_eq!(msg, pt)
 }
 
 fn test_groth16_nonnative_bls12_381() {
@@ -156,9 +154,9 @@ fn test_gemini_native_yata_127() {
 
     warn!("r1cs size: {}", r1cs.a.len());
 
-    let num_constraints = 2000000;
-    let num_variables = 2000000;
-    let num_non_zero = 2000000;
+    let num_constraints = 50000;
+    let num_variables = 100;
+    let num_non_zero = 50000;
 
 
     let ck = warn_span!("gemini::setup").in_scope(||
@@ -195,11 +193,11 @@ fn main() {
         .event_format(format().compact())
         .try_init();
 
-    println!("Groth16 (native) on BLS12-377");
-    test_groth16_native_bls12_377();
-
-    println!("Groth16 (nonnative) on BLS12-381");
-    test_groth16_nonnative_bls12_381();
+    // println!("Groth16 (native) on BLS12-377");
+    // test_groth16_native_bls12_377();
+    //
+    // println!("Groth16 (nonnative) on BLS12-381");
+    // test_groth16_nonnative_bls12_381();
 
     println!("Gemini (native) on Yata-127");
     test_gemini_native_yata_127();

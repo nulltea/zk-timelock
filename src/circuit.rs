@@ -36,6 +36,7 @@ use crate::nonnative::*;
 use crate::{Randomness, Plaintext, Ciphertext, PublicKey, SecretKey, Parameters};
 
 const R_BYTES_SQUEEZE: usize = 16;
+const H2C_DST: &[u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_";
 
 pub struct Circuit<E: Pairing, P: Bls12Parameters<Fp = <E::G1 as CurveGroup>::BaseField>>
     where <E::G1 as CurveGroup>::BaseField: PrimeField
@@ -100,7 +101,7 @@ impl<E: Pairing, P: Bls12Parameters<Fp = <E::G1 as CurveGroup>::BaseField>> Circ
         // Note: hash-to-curve algo is `draft-irtf-cfrg-bls-signature-05` which matches to the one used in Drand network,
         // hash function is Sha2 despite the fact that poseidon is used elsewhere to optimize proving performance.
         let gid = {
-            let qid: E::G2Affine = E::hash(id.as_ref(), tlock::ibe::H2C_DST)?;
+            let qid: E::G2Affine = E::hash(id.as_ref(), H2C_DST)?;
             E::pairing(master.clone(), qid)
         }.0;
 

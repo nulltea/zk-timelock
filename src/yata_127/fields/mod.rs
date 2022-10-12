@@ -8,5 +8,5 @@ pub use fq3::*;
 pub use fq6::*;
 pub use fr::*;
 
-// #[cfg(test)]
-// mod tests;
+#[cfg(test)]
+mod tests;

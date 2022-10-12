@@ -17,57 +17,57 @@ impl Fp3Config for Fq3Config {
     /// We also need "u" to be a nonresidue so it can be the twist
     const NONRESIDUE: Fq = MontFp!("5");
 
-    /// t = (q^3 - 1) / pow(2, 3)
-    const TWO_ADICITY: u32 = 3;
+    /// t = (q^3 - 1) / pow(2, 4)
+    const TWO_ADICITY: u32 = 4;
 
     #[rustfmt::skip]
     /// t_minus_one_div_2
     const TRACE_MINUS_ONE_DIV_TWO: &'static [u64] = &[
-        0xaaa6445b6d2dddb0,
-        0x34df394b02593d47,
-        0x2adc876e32068036,
-        0x83222c48d66791ce,
-        0x6dfc452c71b53e80,
-        0x2e25b00012ef37c1,
-        0x4f0f6cfa18f27775,
-        0x1e6f3981ebcb41c1,
-        0x24c6a8e9d8da5614,
-        0x88f0fe41015308c8,
-        0x0ac3b1490574dedb,
-        0xdfe7455b5f8eb2f8,
-        0x15ea8733e44279e1,
-        0xd0b931fed9777520,
-        0x5a8268209e068a49,
-        0xdcb234cc40e5db62,
-        0x92d6f712a9a88426,
-        0x3cf9109f51c7d7ad,
-        0x74dd750d11df605c,
-        0xbd4245b6eadd4dc2,
-        0xb1d819a30071cf16,
-        0x0aa20002deb73cea,
-        0xc2da221471b6d3b6,
-        0xc5a1166ba20e4086,
-        0x838b718a65ade163,
-        0xfd9ac1eecd389453,
-        0x7c93857926c5bbb5,
-        0x2525492249dc6718,
-        0x89b7671ad5627a47,
-        0x252106e33300fa34,
-        0xdf9087e98286f356,
-        0x0ac56dd333ec9e80,
-        0x6811b130e2422d52,
-        0xa21650757b6e127b,
-        0xbd90307fc68bc41d,
-        0x0a24d07137323f7f,
-        0x101cdedeaea62683,
-        0x9d09eae0cb72c88f,
-        0x126e3a9ed7a
+        0xd553222db696eed8,
+        0x1a6f9ca5812c9ea3,
+        0x156e43b71903401b,
+        0x419116246b33c8e7,
+        0xb6fe229638da9f40,
+        0x9712d80009779be0,
+        0xa787b67d0c793bba,
+        0x0f379cc0f5e5a0e0,
+        0x12635474ec6d2b0a,
+        0xc4787f2080a98464,
+        0x0561d8a482ba6f6d,
+        0xeff3a2adafc7597c,
+        0x0af54399f2213cf0,
+        0xe85c98ff6cbbba90,
+        0x2d4134104f034524,
+        0x6e591a662072edb1,
+        0xc96b7b8954d44213,
+        0x1e7c884fa8e3ebd6,
+        0x3a6eba8688efb02e,
+        0x5ea122db756ea6e1,
+        0x58ec0cd18038e78b,
+        0x055100016f5b9e75,
+        0x616d110a38db69db,
+        0xe2d08b35d1072043,
+        0xc1c5b8c532d6f0b1,
+        0xfecd60f7669c4a29,
+        0x3e49c2bc9362ddda,
+        0x9292a49124ee338c,
+        0x44dbb38d6ab13d23,
+        0x1290837199807d1a,
+        0x6fc843f4c14379ab,
+        0x0562b6e999f64f40,
+        0xb408d898712116a9,
+        0xd10b283abdb7093d,
+        0xdec8183fe345e20e,
+        0x851268389b991fbf,
+        0x880e6f6f57531341,
+        0x4e84f57065b96447,
+        0x9371d4f6bd
     ];
 
     /// a quadratic nonresidue u
     /// u^T
     const QUADRATIC_NONRESIDUE_TO_T: Fq3 = Fq3::new(
-        MontFp!("31334568688129675667391779742052274510420205806735185784442389558377963930051094894950807563085134789270329113622526565786883965538621397755114952991725716326703959304218194989086869980507473982493341252328813423334297534020361933484596397911048192"),
+        MontFp!("48748923930101989821174716110429133049421803076565669803121595617213946350705366541229397933415464702213794982169532151539638467419251481499896327380776367198339245640194519641332872668706920934248025562022318136831195656394186869288232798501470208"),
         Fq::ZERO,
         Fq::ZERO,
     );
