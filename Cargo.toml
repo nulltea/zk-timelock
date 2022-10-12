@@ -11,7 +11,7 @@ ark-std = { version = "^0.3.0", default-features = false }
 ark-snark = { version = "^0.3.0", default-features = false }
 ark-r1cs-std = { version = "^0.3.0", default-features = false }
 ark-relations = { version = "^0.3.0", default-features = false }
-# ark-groth16 = { version = "^0.3.0", features = ["r1cs", "std"] }
+ark-groth16 = { version = "^0.3.0", features = ["r1cs", "std"] }
 ark-gemini = { git = "https://github.com/arkworks-rs/gemini"  }
 ark-sponge = { version = "^0.3.0" , features = ["r1cs"] }
 ark-serialize = { version = "^0.3.0", default-features = false }
@@ -44,27 +44,57 @@ harness = false
 name = "ibe_benchmark"
 
 [features]
+default = [ "curve" ]
 std = [ "ark-std/std", "ark-ff/std", "ark-ec/std", "ark-gemini/std"]
 parallel = [ "ark-ff/parallel", "ark-ec/parallel", "ark-std/parallel", "ark-gemini/parallel" ]
 
-[profile.dev.package."*"]
+curve = [ "scalar_field", "base_field" ]
+scalar_field = []
+base_field = []
+
+[profile.release]
 opt-level = 3
+lto = "thin"
+incremental = true
+panic = 'abort'
+
+[profile.bench]
+opt-level = 3
+debug = false
+rpath = false
+lto = "thin"
+incremental = true
+debug-assertions = false
+
+[profile.dev]
+opt-level = 3
+lto = "thin"
+incremental = true
+debug-assertions = true
+debug = true
+panic = 'abort'
+
+[profile.test]
+opt-level = 3
+lto = "thin"
+incremental = true
+debug-assertions = true
+debug = true
 
 [patch.crates-io]
-ark-test-curves = { git = "https://github.com/arkworks-rs/algebra" }
+ark-ff = { git = "https://github.com/arkworks-rs/algebra", rev = "ba9f533f51d55682c186200a9bd8aaf1d5db1a1b" }
+ark-ec = { git = "https://github.com/arkworks-rs/algebra", rev = "ba9f533f51d55682c186200a9bd8aaf1d5db1a1b" }
+ark-poly = { git = "https://github.com/arkworks-rs/algebra", rev = "ba9f533f51d55682c186200a9bd8aaf1d5db1a1b" }
+ark-serialize = { git = "https://github.com/arkworks-rs/algebra", rev = "ba9f533f51d55682c186200a9bd8aaf1d5db1a1b" }
 ark-r1cs-std = { git = "https://github.com/arkworks-rs/r1cs-std" }
-ark-std = { git = "https://github.com/arkworks-rs/std" }
-# ark-groth16 = { git = "https://github.com/arkworks-rs/groth16", branch = "sync-algebra" }
+ark-std = { path = "../examples/std" }
+ark-groth16 = { git = "https://github.com/arkworks-rs/groth16", branch = "sync-algebra" }
 ark-gemini = { git = "https://github.com/arkworks-rs/gemini" }
 ark-bls12-381 = { git = "https://github.com/arkworks-rs/curves" }
 ark-bls12-377 = { git = "https://github.com/arkworks-rs/curves" }
 ark-bw6-761 = { git = "https://github.com/arkworks-rs/curves" }
 ark-relations = {git = "https://github.com/arkworks-rs/snark", branch = "sync-algebra" }
 ark-snark = { git = "https://github.com/arkworks-rs/snark", branch = "sync-algebra" }
-ark-ff = { git = "https://github.com/arkworks-rs/algebra" }
-ark-ec = { git = "https://github.com/arkworks-rs/algebra" }
-ark-poly = { git = "https://github.com/arkworks-rs/algebra" }
 ark-sponge = { git = "https://github.com/arkworks-rs/sponge" }
-ark-serialize = { git = "https://github.com/arkworks-rs/algebra" }
-ark-algebra-test-templates = { git = "https://github.com/arkworks-rs/algebra" }
+ark-algebra-test-templates = { git = "https://github.com/arkworks-rs/algebra", rev = "ba9f533f51d55682c186200a9bd8aaf1d5db1a1b" }
 ark-crypto-primitives = { git = "https://github.com/arkworks-rs/crypto-primitives" }
