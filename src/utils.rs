@@ -139,16 +139,11 @@ pub fn gt_scalar_mul_le<T: Field + Zero, B: AsRef<[u8]>>(trg: T, rhs: B) -> T {
         .iter()
         .rev()
         .flat_map(|byte| (0..8).rev().map(move |i| ((byte >> i) & 1u8) == 1u8))
-        .skip(1)
     {
-        let mut y = res.clone();
-
         res.square_in_place();
-        y = res.clone();
         if bit {
             res *= mul;
         }
-
     }
     res
 }
@@ -157,23 +152,16 @@ pub fn curve_scalar_mul_le<T: CurveGroup + Zero, B: AsRef<[u8]>>(trg: T, rhs: B)
     let mut res = T::zero();
     let mut mul = trg;
 
-    let y = res.clone();
-    let x = y;
-
     for bit in rhs
         .as_ref()
         .iter()
         .rev()
         .flat_map(|byte| (0..8).rev().map(move |i| ((byte >> i) & 1u8) == 1u8))
-        .skip(1)
     {
         res.double_in_place();
         if bit {
-            res = res.add(&mul)
+            res += mul;
         }
-
-        let y = res.clone();
-        let x = y;
     }
     res
 }
