@@ -1,4 +1,4 @@
-use crate::yata_127::*;
+use crate::yt6_776::*;
 use ark_algebra_test_templates::*;
 
 test_field!(fr; Fr; mont_prime_field);

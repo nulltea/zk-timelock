@@ -1,13 +1,13 @@
 #![feature(inherent_associated_types)]
 
-pub mod circuit;
+pub mod circuits;
 mod parameters;
 pub mod poseidon;
 pub mod utils;
 mod nonnative;
-pub mod yata_127;
+pub mod yt6_776;
 
-pub use crate::circuit::*;
+pub use crate::circuits::*;
 
 pub use ark_bls12_381::Bls12_381;
 use ark_ec::{CurveGroup};

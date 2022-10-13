@@ -6,12 +6,12 @@ use ark_ec::{AffineRepr, CurveGroup, Group};
 use ark_ff::Field;
 use ark_groth16::Groth16;
 use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
-use ark_std::{test_rng, UniformRand};
+use ark_std::{rand, test_rng, UniformRand};
 use sha2::Digest;
 use tracing::{info_span, info, Level};
 use tracing_subscriber::fmt::{format, init};
 use tracing_subscriber::fmt::format::FmtSpan;
-use zk_tlock::{Circuit, NonnativeCircuit, Parameters};
+use zk_tlock::{Circuit, GeminiNativeCircuit, NonnativeCircuit, Parameters};
 use zk_tlock::utils::ZkCryptoDeserialize;
 use ark_std::rand::Rng;
 use tracing_subscriber::layer::SubscriberExt;
@@ -19,7 +19,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 fn test_groth16_native_bls12_377() {
     type TestCircuit = Circuit::<Bls12_377, ark_bls12_377::Parameters>;
-    let mut rng = test_rng();
+    let mut rng = rand::thread_rng();
     let bytes = [1, 2, 3];
     let msg = ark_bls12_377::Fq::from_random_bytes(&bytes).unwrap();
 
@@ -83,7 +83,7 @@ fn test_groth16_native_bls12_377() {
 fn test_groth16_nonnative_bls12_381() {
     type TestCircuit = NonnativeCircuit::<ark_bls12_377::G1Projective>;
 
-    let mut rng = test_rng();
+    let mut rng = rand::thread_rng();
     let bytes = [1, 2, 3];
     let msg = ark_bls12_381::Fq::from_random_bytes(&bytes).unwrap();
 
@@ -139,7 +139,7 @@ fn test_groth16_nonnative_bls12_381() {
 fn test_gemini_native_yata_127() {
     type TestCircuit = Circuit::<Bls12_381, ark_bls12_381::Parameters>;
 
-    let mut rng = test_rng();
+    let mut rng = rand::thread_rng();
     let bytes = [1, 2, 3];
     let msg = ark_bls12_381::Fq::from_random_bytes(&bytes).unwrap();
 
@@ -155,28 +155,27 @@ fn test_gemini_native_yata_127() {
     };
 
     let circuit = info_span!("encrypt-message").in_scope(|| {
-        TestCircuit::new(
+        GeminiNativeCircuit(TestCircuit::new(
             master.clone(),
             &id,
             msg.clone().into(),
-            &mut rng)
-    }).unwrap();
+            &mut rng).unwrap())
+    });
 
-    let circuit = TestCircuit::new(master, id, msg.clone().into(), &mut rng).unwrap();
-    let ct = circuit.ciphertext.clone();
+    let ct = circuit.0.ciphertext.clone();
 
     let r1cs = info_span!("gemini::generate_relation").in_scope(||
-        ark_gemini::circuit::generate_relation::<ark_bls12_381::Fq, TestCircuit>(circuit)
+        ark_gemini::circuit::generate_relation::<ark_bls12_381::Fq, GeminiNativeCircuit>(circuit)
     );
 
     info!("r1cs size: {}", r1cs.a.len());
 
-    let num_constraints = 50000;
+    let num_constraints = 68000;
     let num_variables = 100;
-    let num_non_zero = 50000;
+    let num_non_zero = 68000;
 
     let ck = info_span!("gemini::setup").in_scope(||
-        ark_gemini::kzg::CommitterKey::<zk_tlock::yata_127::Yata>::new(
+        ark_gemini::kzg::CommitterKey::<zk_tlock::yt6_776::Yata>::new(
         num_non_zero + num_variables + num_constraints,
         5,
         &mut rng,
@@ -185,58 +184,6 @@ fn test_gemini_native_yata_127() {
     let _proof = info_span!("gemini::prove").in_scope(||
         ark_gemini::psnark::Proof::new_time(&r1cs, &ck)
     );
-
-    let priv_key = {
-        let bytes = hex::decode("a4721e6c3eafcd823f138cd29c6c82e8c5149101d0bb4bafddbac1c2d1fe3738895e4e21dd4b8b41bf007046440220910bb1cdb91f50a84a0d7f33ff2e8577aa62ac64b35a291a728a9db5ac91e06d1312b48a376138d77b4d6ad27c24221afe").unwrap();
-        ark_bls12_381::G2Affine::deserialize_zk_crypto(&bytes).unwrap()
-    };
-
-    let pt = info_span!("decrypt message").in_scope(||
-        TestCircuit::decrypt(&priv_key, &ct)
-    ).unwrap();
-
-    assert_eq!(msg, pt)
-}
-
-fn test_groth16_native_yata_127() {
-    type TestCircuit = Circuit::<Bls12_381, ark_bls12_381::Parameters>;
-
-    let mut rng = test_rng();
-    let bytes = [1, 2, 3];
-    let msg = ark_bls12_381::Fq::from_random_bytes(&bytes).unwrap();
-
-    let master: _ = {
-        let bytes = hex::decode("8200fc249deb0148eb918d6e213980c5d01acd7fc251900d9260136da3b54836ce125172399ddc69c4e3e11429b62c11").unwrap();
-        ark_bls12_381::G1Affine::deserialize_zk_crypto(&bytes).unwrap()
-    };
-    let round_number = 1000u64;
-    let id = {
-        let mut hash = sha2::Sha256::new();
-        hash.update(&round_number.to_be_bytes());
-        &hash.finalize().to_vec()[0..32]
-    };
-
-    let circuit = info_span!("encrypt-message").in_scope(|| {
-        TestCircuit::new(
-            master.clone(),
-            &id,
-            msg.clone().into(),
-            &mut rng)
-    }).unwrap();
-
-    let ct = circuit.ciphertext.clone();
-
-    let (pk, _vk) = info_span!("groth16 setup").in_scope(||
-        Groth16::<zk_tlock::yata_127::Yata>::setup(circuit, &mut rng)
-    ).unwrap();
-
-    let circuit = TestCircuit::new(master, id, msg.clone().into(), &mut rng).unwrap();
-    let ct = circuit.ciphertext.clone();
-
-    let _proof = info_span!("groth16 prove").in_scope(||
-        Groth16::prove(&pk, circuit, &mut rng)
-    ).unwrap();
-
 
     let priv_key = {
         let bytes = hex::decode("a4721e6c3eafcd823f138cd29c6c82e8c5149101d0bb4bafddbac1c2d1fe3738895e4e21dd4b8b41bf007046440220910bb1cdb91f50a84a0d7f33ff2e8577aa62ac64b35a291a728a9db5ac91e06d1312b48a376138d77b4d6ad27c24221afe").unwrap();
@@ -272,9 +219,6 @@ fn main() {
     println!("Groth16 (nonnative) on BLS12-381");
     test_groth16_nonnative_bls12_381();
 
-    // println!("Gemini (native) on Yata-127");
-    // test_gemini_native_yata_127();
-
-    // println!("Groth16 (native) on Yata-127");
-    // test_groth16_native_yata_127();
+    println!("Gemini (native) on Yata-127");
+    test_gemini_native_yata_127();
 }

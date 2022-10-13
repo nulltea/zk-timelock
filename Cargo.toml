@@ -79,21 +79,23 @@ incremental = true
 debug-assertions = true
 debug = true
 
+# In of build errors check if `sync-algebra` branch exits for `arkwroks-rs/groth16` and ``arkwroks-rs/snark` repos.
+# If no consider taking the earliest revision after it's merging :)
 [patch.crates-io]
 ark-ff = { git = "https://github.com/arkworks-rs/algebra", rev = "ba9f533f51d55682c186200a9bd8aaf1d5db1a1b" }
 ark-ec = { git = "https://github.com/arkworks-rs/algebra", rev = "ba9f533f51d55682c186200a9bd8aaf1d5db1a1b" }
 ark-poly = { git = "https://github.com/arkworks-rs/algebra", rev = "ba9f533f51d55682c186200a9bd8aaf1d5db1a1b" }
 ark-serialize = { git = "https://github.com/arkworks-rs/algebra", rev = "ba9f533f51d55682c186200a9bd8aaf1d5db1a1b" }
-ark-r1cs-std = { git = "https://github.com/arkworks-rs/r1cs-std" }
-ark-std = { path = "../examples/std" }
+ark-r1cs-std = { git = "https://github.com/arkworks-rs/r1cs-std", rev = "4fbdc2b6a5c27aebd7210b34fa25575309494cdf" }
+ark-std = { git = "https://github.com/arkworks-rs/std", rev = "7019830e89b69aca059ce7848e53bd99a09efbab" }
 ark-groth16 = { git = "https://github.com/arkworks-rs/groth16", branch = "sync-algebra" }
-ark-gemini = { git = "https://github.com/arkworks-rs/gemini" }
-ark-bls12-381 = { git = "https://github.com/arkworks-rs/curves" }
-ark-bls12-377 = { git = "https://github.com/arkworks-rs/curves" }
-ark-bw6-761 = { git = "https://github.com/arkworks-rs/curves" }
+ark-gemini = { git = "https://github.com/arkworks-rs/gemini", rev = "39baec0cc7f614c6ef62efc3b837c447049a0570"}
+ark-bls12-381 = { git = "https://github.com/arkworks-rs/curves", rev = "efefa209d677813c9b30ee4a0763b3f63abdeceb" }
+ark-bls12-377 = { git = "https://github.com/arkworks-rs/curves", rev = "efefa209d677813c9b30ee4a0763b3f63abdeceb" }
+ark-bw6-761 = { git = "https://github.com/arkworks-rs/curves", rev = "efefa209d677813c9b30ee4a0763b3f63abdeceb" }
 ark-relations = {git = "https://github.com/arkworks-rs/snark", branch = "sync-algebra" }
 ark-snark = { git = "https://github.com/arkworks-rs/snark", branch = "sync-algebra" }
-ark-sponge = { git = "https://github.com/arkworks-rs/sponge" }
+ark-sponge = { git = "https://github.com/arkworks-rs/sponge", rev = "2d5f91b19ff6d3d3e9b293a3f531ad7595e2aa78" }
 ark-crypto-primitives = { git = "https://github.com/arkworks-rs/crypto-primitives" }
 ark-algebra-test-templates = { git = "https://github.com/arkworks-rs/algebra", rev = "ba9f533f51d55682c186200a9bd8aaf1d5db1a1b" }
 ark-test-curves = { git = "https://github.com/arkworks-rs/algebra", rev = "ba9f533f51d55682c186200a9bd8aaf1d5db1a1b" }

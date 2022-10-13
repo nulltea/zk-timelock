@@ -1,7 +1,6 @@
 use crate::poseidon::get_poseidon_params;
 use anyhow::anyhow;
 use ark_ff::{BigInteger, BitIteratorLE, Field, PrimeField, ToConstraintField, Zero, Fp12, One, QuadExtField, BigInteger384, Fp12ConfigWrapper};
-// use ark_groth16::{Groth16, Proof, ProvingKey, VerifyingKey};
 use ark_r1cs_std::fields::fp::FpVar;
 use ark_r1cs_std::prelude::*;
 use ark_r1cs_std::ToConstraintFieldGadget;
@@ -509,6 +508,26 @@ impl<PC: CurveGroup> ConstraintSynthesizer<PC::BaseField> for NonnativeCircuit<P
         let ciphertext = self.ciphertext_var(cs.clone(), AllocationMode::Input)?;
 
         self.verify_encryption(cs.clone(), gid, &message, &ciphertext)
+    }
+}
+
+// This is a modified native circuit for experimental use with Gemini proving system.
+// Due to mis-configured (hopefully) padding mechanism of Gemini this circuit intentionally has no input variables.
+// For more details see: https://github.com/arkworks-rs/gemini/issues/5
+pub struct GeminiNativeCircuit(pub Circuit<Bls12_381, ark_bls12_381::Parameters>);
+
+impl ConstraintSynthesizer<ark_bls12_381::Fq> for GeminiNativeCircuit {
+    fn generate_constraints(
+        self,
+        cs: ConstraintSystemRef<ark_bls12_381::Fq>,
+    ) -> Result<(), SynthesisError> {
+        let gid = Fp12Var::<ark_bls12_381::Fq12Config>::new_witness(ns!(cs, "gid"), || Ok(self.0.gid))?;
+        let ciphertext = self.0.ciphertext_var(cs.clone(), AllocationMode::Witness)?;
+        let message = FpVar::<ark_bls12_381::Fq>::new_witness(ns!(cs, "plaintext"), || {
+            Ok(self.0.msg)
+        })?;
+
+        self.0.verify_encryption(cs.clone(), gid, &message, &ciphertext)
     }
 }
 
