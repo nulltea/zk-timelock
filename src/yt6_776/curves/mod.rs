@@ -21,9 +21,9 @@ mod tests;
 pub type GT = Fq6;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct Yata;
+pub struct YT6_776;
 
-impl Pairing for Yata {
+impl Pairing for YT6_776 {
     type ScalarField = Fr;
     type G1 = G1Projective;
     type G1Affine = G1Affine;
@@ -40,20 +40,20 @@ impl Pairing for Yata {
         let mut result = Self::TargetField::one();
         a.into_iter().zip_eq(b).for_each(|(p, q)| {
             let (p, q) = (p.into(), q.into());
-            result *= &Yata::ate_miller_loop(&p.0, &q.0);
+            result *= &YT6_776::ate_miller_loop(&p.0, &q.0);
         });
 
         MillerLoopOutput(result)
     }
 
     fn final_exponentiation(r: MillerLoopOutput<Self>) -> Option<PairingOutput<Self>> {
-        Some(PairingOutput(Yata::final_exponentiation(&r.0)))
+        Some(PairingOutput(YT6_776::final_exponentiation(&r.0)))
     }
 }
 
-impl Yata {
+impl YT6_776 {
     pub fn ate_pairing(p: &G1Affine, q: &G2Affine) -> GT {
-        Yata::final_exponentiation(&Yata::ate_miller_loop(p, q))
+        YT6_776::final_exponentiation(&YT6_776::ate_miller_loop(p, q))
     }
 
     fn ate_miller_loop(p: &G1Affine, q: &G2Affine) -> GT {
@@ -119,9 +119,9 @@ impl Yata {
 
     fn final_exponentiation(value: &Fq6) -> GT {
         let value_inv = value.inverse().unwrap();
-        let value_to_first_chunk = Yata::final_exponentiation_first(value, &value_inv);
-        let value_inv_to_first_chunk = Yata::final_exponentiation_first(&value_inv, value);
-        Yata::final_exponentiation_last(&value_to_first_chunk, &value_inv_to_first_chunk)
+        let value_to_first_chunk = YT6_776::final_exponentiation_first(value, &value_inv);
+        let value_inv_to_first_chunk = YT6_776::final_exponentiation_first(&value_inv, value);
+        YT6_776::final_exponentiation_last(&value_to_first_chunk, &value_inv_to_first_chunk)
     }
 
     fn final_exponentiation_first(elt: &Fq6, elt_inv: &Fq6) -> Fq6 {

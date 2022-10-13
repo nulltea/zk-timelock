@@ -73,7 +73,7 @@ fn test_groth16_native_bls12_377() {
 
     assert!(verified);
 
-    let pt = info_span!("decrypt message").in_scope(||
+    let pt = info_span!("decrypt-message").in_scope(||
         TestCircuit::decrypt(&priv_key, &ct)
     ).unwrap();
 
@@ -106,7 +106,7 @@ fn test_groth16_nonnative_bls12_381() {
             &mut rng)
     }).unwrap();
 
-    let (pk, _vk) = info_span!("groth16 setup").in_scope(||
+    let (pk, _vk) = info_span!("groth16::setup").in_scope(||
         Groth16::<BW6_761>::setup(circuit, &mut rng)
     ).unwrap();
 
@@ -129,7 +129,7 @@ fn test_groth16_nonnative_bls12_381() {
 
     // assert!(verified);
 
-    let pt = info_span!("decrypt message").in_scope(||
+    let pt = info_span!("decrypt-message").in_scope(||
         TestCircuit::decrypt(&priv_key, &ct)
     ).unwrap();
 
@@ -175,7 +175,7 @@ fn test_gemini_native_yata_127() {
     let num_non_zero = 68000;
 
     let ck = info_span!("gemini::setup").in_scope(||
-        ark_gemini::kzg::CommitterKey::<zk_tlock::yt6_776::Yata>::new(
+        ark_gemini::kzg::CommitterKey::<zk_tlock::yt6_776::YT6_776>::new(
         num_non_zero + num_variables + num_constraints,
         5,
         &mut rng,
@@ -190,7 +190,7 @@ fn test_gemini_native_yata_127() {
         ark_bls12_381::G2Affine::deserialize_zk_crypto(&bytes).unwrap()
     };
 
-    let pt = info_span!("decrypt message").in_scope(||
+    let pt = info_span!("decrypt-message").in_scope(||
         TestCircuit::decrypt(&priv_key, &ct)
     ).unwrap();
 

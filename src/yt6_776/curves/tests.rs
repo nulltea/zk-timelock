@@ -3,5 +3,5 @@ use ark_algebra_test_templates::*;
 
 test_group!(g1; G1Projective; sw);
 test_group!(g2; G2Projective; sw);
-test_group!(pairing_output; ark_ec::pairing::PairingOutput<Yata>; msm);
-test_pairing!(pairing; crate::yt6_776::Yata);
+test_group!(pairing_output; ark_ec::pairing::PairingOutput<YT6_776>; msm);
+test_pairing!(pairing; crate::yt6_776::YT6_776);
