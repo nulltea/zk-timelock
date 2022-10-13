@@ -1,7 +1,6 @@
 use crate::poseidon::get_poseidon_params;
 use anyhow::anyhow;
-use ark_ff::{to_bytes, BigInteger, BitIteratorLE, Field, PrimeField, ToConstraintField, Zero, Fp12, One, Fp6ParamsWrapper, Fp12ParamsWrapper, Fp2ParamsWrapper, QuadExtField, BigInteger384};
-use ark_groth16::{Groth16, Proof, ProvingKey, VerifyingKey};
+use ark_ff::{BigInteger, BitIteratorLE, Field, PrimeField, ToConstraintField, Zero, Fp12, One, QuadExtField, BigInteger384, Fp12ConfigWrapper};
 use ark_r1cs_std::fields::fp::FpVar;
 use ark_r1cs_std::prelude::*;
 use ark_r1cs_std::ToConstraintFieldGadget;
@@ -10,7 +9,7 @@ use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystem, ConstraintSys
 use ark_r1cs_std::groups::{bls12, CurveVar};
 use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
 use ark_sponge::poseidon::constraints::PoseidonSpongeVar;
-use ark_sponge::poseidon::{PoseidonParameters, PoseidonSponge};
+use ark_sponge::poseidon::{PoseidonConfig, PoseidonSponge};
 use ark_std::marker::PhantomData;
 use ark_std::rand::{CryptoRng, Rng, RngCore};
 use ark_std::vec::Vec;
@@ -23,44 +22,48 @@ use std::ops::{Add, Mul, MulAssign};
 use std::str::FromStr;
 use ark_ec::bls12::Bls12Parameters;
 use ark_r1cs_std::fields::fp12::Fp12Var;
-use ark_ec::{AffineCurve, PairingEngine, ProjectiveCurve};
+use ark_ec::{pairing::Pairing, CurveGroup, Group};
 use ark_sponge::constraints::CryptographicSpongeVar;
-use ark_sponge::{Absorb, CryptographicSponge};
+use ark_sponge::{Absorb, CryptographicSponge, FieldBasedCryptographicSponge};
 use group::Curve as _;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_bls12_381::Bls12_381;
-use ark_nonnative_field::NonNativeFieldVar;
+use ark_r1cs_std::fields::nonnative::NonNativeFieldVar;
 use ark_r1cs_std::groups::curves::short_weierstrass::ProjectiveVar;
-use crate::utils::{curve_scalar_mul_le, gt_scalar_mul_le, GtAbsorbable, gtvar_to_fqvars, Hash2Curve, ZkCryptoDeserialize, ZkCryptoSerialize};
+use crate::utils::{curve_scalar_mul_le, gt_scalar_mul_le, GtAbsorbable, gtvar_to_fqvars, Hash2Curve, ZkCryptoDeserialize};
 use sha2::Sha256;
 use crate::nonnative::*;
 use crate::{Randomness, Plaintext, Ciphertext, PublicKey, SecretKey, Parameters};
 
-const R_BYTES_SQUEEZE: usize = 16;
+const R_BYTES_SQUEEZE: usize = 32;
+const H2C_DST: &[u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_";
 
-pub struct Circuit<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>>
+pub struct Circuit<E: Pairing, P: Bls12Parameters<Fp = <E::G1 as CurveGroup>::BaseField>>
+    where <E::G1 as CurveGroup>::BaseField: PrimeField
 {
-    gid: E::Fqk,
-    sigma: Randomness<E::G1Projective>,
+    sigma: Randomness<E::G1>,
     master: PublicKey<E>,
-    msg: Plaintext<E::G1Projective>,
-    pub resulted_ciphertext: Ciphertext<E::G1Projective>,
-    params: Parameters<E::G1Projective>,
+    msg: Plaintext<E::G1>,
+    pub ciphertext: Ciphertext<E::G1>,
+    pub gid: E::TargetField,
+    params: Parameters<E::G1>,
     _curve_params: PhantomData<P>
 }
 
-impl<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>> Circuit<E, P>
-    where E::Fq: PrimeField + Absorb,
+impl<E: Pairing, P: Bls12Parameters<Fp = <E::G1 as CurveGroup>::BaseField>> Circuit<E, P>
+    where <E::G1 as CurveGroup>::BaseField: PrimeField + Absorb,
           E: Hash2Curve + GtAbsorbable,
-          ProjectiveVar<P::G1Parameters, FpVar<P::Fp>>: AllocVar<E::G1Projective, E::Fq> + CurveVar<E::G1Projective, E::Fq> + AllocVar<E::G1Projective, P::Fp>,
+          ProjectiveVar<P::G1Parameters, FpVar<P::Fp>>: AllocVar<E::G1, <E::G1 as CurveGroup>::BaseField> + CurveVar<E::G1, <E::G1 as CurveGroup>::BaseField> + AllocVar<E::G1, P::Fp>,
 {
-    pub fn new<I: AsRef<[u8]>, R: Rng + CryptoRng>(
+    type Fq = <E::G1 as CurveGroup>::BaseField;
+
+    pub fn new<I: AsRef<[u8]>, R: Rng>(
         master: PublicKey<E>,
         id: I,
-        msg: Plaintext<E::G1Projective>,
+        msg: Plaintext<E::G1>,
         rng: &mut R,
     ) -> anyhow::Result<Self> {
-        let params = Parameters::<E::G1Projective>::default();
+        let params = Parameters::<E::G1>::default();
 
         let (gid, sigma, ct) = Self::encrypt_inner(&master, id, &msg, &params, rng)
             .map_err(|e| anyhow!("error encrypting message: {e}"))?;
@@ -70,64 +73,62 @@ impl<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>> Circuit<E, P>
             sigma,
             msg,
             master,
-            resulted_ciphertext: ct,
+            ciphertext: ct,
             params,
             _curve_params: Default::default()
         })
     }
 
-    pub fn encrypt<I: AsRef<[u8]>, R: Rng + CryptoRng>(
+    pub fn encrypt<I: AsRef<[u8]>, R: Rng>(
         master: &PublicKey<E>,
         id: I,
-        msg: &Plaintext<E::G1Projective>,
+        msg: &Plaintext<E::G1>,
         rng: &mut R,
-    ) -> anyhow::Result<Ciphertext<E::G1Projective>> {
-        let params = Parameters::<E::G1Projective>::default();
-
+    ) -> anyhow::Result<Ciphertext<E::G1>> {
+        let params = Parameters::<E::G1>::default();
         let (_, _, ct) = Self::encrypt_inner(master, id, msg, &params, rng)?;
         Ok(ct)
     }
 
-    fn encrypt_inner<I: AsRef<[u8]>, R: Rng + CryptoRng>(
+    fn encrypt_inner<I: AsRef<[u8]>, R: Rng>(
         master: &PublicKey<E>,
         id: I,
-        msg: &Plaintext<E::G1Projective>,
-        params: &Parameters<E::G1Projective>,
+        msg: &Plaintext<E::G1>,
+        params: &Parameters<E::G1>,
         rng: &mut R,
-    ) -> anyhow::Result<(E::Fqk, Randomness<E::G1Projective>, Ciphertext<E::G1Projective>)> {
+    ) -> anyhow::Result<(E::TargetField, Randomness<E::G1>, Ciphertext<E::G1>)> {
         // 1. Compute Gid = e(master,Q_id)
         // Note: hash-to-curve algo is `draft-irtf-cfrg-bls-signature-05` which matches to the one used in Drand network,
         // hash function is Sha2 despite the fact that poseidon is used elsewhere to optimize proving performance.
         let gid = {
-            let qid: E::G2Affine = E::hash(id.as_ref(), tlock::ibe::H2C_DST)?;
+            let qid: E::G2Affine = E::hash(id.as_ref(), H2C_DST)?;
             E::pairing(master.clone(), qid)
-        };
+        }.0;
 
         // 2. Derive random sigma
-        let sigma = Randomness::<E::G1Projective>::rand(rng);
+        let sigma = Randomness::<E::G1>::rand(rng);
 
         // 3. Derive r from sigma and msg
         let r = {
             let mut sponge = PoseidonSponge::new(&params.poseidon);
             sponge.absorb(&sigma.0);
             sponge.absorb(&msg);
-            sponge.clone().squeeze_bytes(R_BYTES_SQUEEZE)
+            sponge.squeeze_bytes(R_BYTES_SQUEEZE)
         };
 
-        // 4. Compute U = G^r
+        // 4. Compute U = G*r
         let mut u = curve_scalar_mul_le(
-            E::G1Projective::prime_subgroup_generator(),
+            E::G1::generator(),
             &r
         );
 
         // 5. Compute V = sigma XOR H(rGid)
         let v = {
-            let mut r_gid: E::Fqk = gt_scalar_mul_le(gid.clone(), r);
+            let mut r_gid: E::TargetField = gt_scalar_mul_le(gid.clone(), &r);
 
             let mut sponge = PoseidonSponge::new(&params.poseidon);
             sponge.absorb(&E::gt_to_absorbable(&r_gid));
-            let h_r_gid = sponge.squeeze_field_elements::<E::Fq>(1).remove(0);
-
+            let h_r_gid = sponge.squeeze_native_field_elements(1).remove(0);
             sigma.0 + h_r_gid
         };
 
@@ -136,7 +137,7 @@ impl<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>> Circuit<E, P>
             // todo: could we skip hashing here?
             let mut sponge = PoseidonSponge::new(&params.poseidon);
             sponge.absorb(&sigma.0);
-            let h_sigma = sponge.squeeze_field_elements::<E::Fq>(1).remove(0);
+            let h_sigma = sponge.squeeze_native_field_elements(1).remove(0);
             (*msg).clone() + h_sigma
         };
 
@@ -147,19 +148,20 @@ impl<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>> Circuit<E, P>
         }))
     }
 
+    #[inline]
     pub fn decrypt(
         sk: &SecretKey<E>,
-        ct: &Ciphertext<E::G1Projective>,
-    ) -> anyhow::Result<Plaintext<E::G1Projective>> {
-        let params = Parameters::<E::G1Projective>::default();
+        ct: &Ciphertext<E::G1>,
+    ) -> anyhow::Result<Plaintext<E::G1>> {
+        let params = Parameters::<E::G1>::default();
 
         // 1. Compute sigma = V XOR H2(e(rP,private))
         let sigma = {
-            let r_gid = E::pairing(ct.u.clone(), sk.clone());
+            let r_gid = E::pairing(ct.u.clone(), sk.clone()).0;
 
             let mut sponge = PoseidonSponge::new(&params.poseidon);
             sponge.absorb(&E::gt_to_absorbable(&r_gid));
-            let h_r_gid = sponge.squeeze_field_elements::<E::Fq>(1).remove(0);
+            let h_r_gid = sponge.squeeze_native_field_elements(1).remove(0);
 
             ct.v - h_r_gid
         };
@@ -169,7 +171,7 @@ impl<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>> Circuit<E, P>
             // todo: could we skip hashing here?
             let mut sponge = PoseidonSponge::new(&params.poseidon);
             sponge.absorb(&sigma);
-            let h_sigma = sponge.squeeze_field_elements::<E::Fq>(1).remove(0);
+            let h_sigma = sponge.squeeze_native_field_elements(1).remove(0);
             ct.w.clone() - h_sigma
         };
 
@@ -178,24 +180,44 @@ impl<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>> Circuit<E, P>
             let mut sponge = PoseidonSponge::new(&params.poseidon);
             sponge.absorb(&sigma);
             sponge.absorb(&msg);
-            curve_scalar_mul_le(
-                E::G1Projective::prime_subgroup_generator(),
-                &sponge.squeeze_bytes(R_BYTES_SQUEEZE)
-            )
+            let r = sponge.squeeze_bytes(R_BYTES_SQUEEZE);
+            curve_scalar_mul_le(E::G1::generator(), &r)
         };
         assert_eq!(ct.u, r_g);
 
         Ok(msg)
     }
+
+    pub fn get_public_inputs(
+        gid: &E::TargetField,
+        cipher: &Ciphertext<E::G1>,
+    ) -> Vec<<E::G1 as CurveGroup>::BaseField>
+        where
+            E::G1: ToConstraintField<<E::G1 as CurveGroup>::BaseField>,
+            E::TargetField: ToConstraintField<<E::G1 as CurveGroup>::BaseField>,
+    {
+        let gid_inputs = gid.to_field_elements().unwrap();
+
+        let mut u_inputs = cipher.u.to_field_elements().unwrap();
+        let v_inputs = cipher.v.to_field_elements().unwrap();
+        let w_inputs = cipher.w.to_field_elements().unwrap();
+
+        // Fix for the different behavior of Short Weierstrass `G1Var::new_input` and `G1::to_field_elements`.
+        // See: https://github.com/arkworks-rs/r1cs-std/issues/106
+        u_inputs[2] = <E::G1 as CurveGroup>::BaseField::one();
+
+        gid_inputs.into_iter().chain(u_inputs).chain(v_inputs).chain(w_inputs).collect()
+    }
+
     pub(crate) fn verify_encryption(
         &self,
-        cs: ConstraintSystemRef<E::Fq>,
-        gid: Fp12Var<P::Fp12Params>,
-        msg: &FpVar<E::Fq>,
-        ct: &(bls12::G1Var<P>, FpVar<E::Fq>, FpVar<E::Fq>),
+        cs: ConstraintSystemRef<<E::G1 as CurveGroup>::BaseField>,
+        gid: Fp12Var<P::Fp12Config>,
+        msg: &FpVar<<E::G1 as CurveGroup>::BaseField>,
+        ct: &(bls12::G1Var<P>, FpVar<<E::G1 as CurveGroup>::BaseField>, FpVar<<E::G1 as CurveGroup>::BaseField>),
     ) -> Result<(), SynthesisError> {
         // 2. Derive random sigma
-        let sigma = FpVar::<E::Fq>::new_witness(ns!(cs, "sigma"), || Ok(&self.sigma.0))?;
+        let sigma = FpVar::<<E::G1 as CurveGroup>::BaseField>::new_witness(ns!(cs, "sigma"), || Ok(&self.sigma.0))?;
 
         // 3. Derive r from sigma and msg
         let r = {
@@ -204,18 +226,18 @@ impl<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>> Circuit<E, P>
             sponge.absorb(&msg)?;
             sponge
                 .squeeze_bytes(R_BYTES_SQUEEZE)?
-                .into_iter().flat_map(|b| b.to_bits_le().unwrap()).collect::<Vec<_>>()
+                .into_iter().flat_map(|byte| byte.to_bits_le().unwrap()).collect::<Vec<_>>()
         };
 
         // 4. Compute U = G*r
-        let g = bls12::G1Var::<P>::new_constant(ns!(cs, "generator"), E::G1Projective::prime_subgroup_generator())?;
+        let g = bls12::G1Var::<P>::new_constant(ns!(cs, "generator"), E::G1::generator())?;
         let u = g.scalar_mul_le(r.iter())?;
         u.enforce_equal(&ct.0)?;
 
         // 5. Compute V = sigma XOR H(rGid)
         let v = {
             let r_gid = {
-                let mut res = Fp12Var::<P::Fp12Params>::one();
+                let mut res = Fp12Var::<P::Fp12Config>::one();
                 let mut mul = gid;
                 for bit in r.into_iter() {
                     let tmp = res.clone() * &mul;
@@ -246,7 +268,6 @@ impl<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>> Circuit<E, P>
 
             msg + h_sigma
         };
-
         w.enforce_equal(&ct.2)?;
 
         Ok(())
@@ -254,26 +275,27 @@ impl<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>> Circuit<E, P>
 
     pub(crate) fn ciphertext_var(
         &self,
-        cs: ConstraintSystemRef<E::Fq>,
+        cs: ConstraintSystemRef<<E::G1 as CurveGroup>::BaseField>,
         mode: AllocationMode,
-    ) -> Result<(bls12::G1Var<P>, FpVar<E::Fq>, FpVar<E::Fq>), SynthesisError> {
+    ) -> Result<(bls12::G1Var<P>, FpVar<<E::G1 as CurveGroup>::BaseField>, FpVar<<E::G1 as CurveGroup>::BaseField>), SynthesisError> {
         let u = bls12::G1Var::<P>::new_variable(
             ns!(cs, "ciphertext_u"),
-            || Ok(self.resulted_ciphertext.u),
+            || Ok(self.ciphertext.u),
             mode,
         )?;
-        let v = FpVar::<E::Fq>::new_variable(
+
+        let v = FpVar::<<E::G1 as CurveGroup>::BaseField>::new_variable(
             ns!(cs, "ciphertext_v"),
             || {
-                Ok(self.resulted_ciphertext.v)
+                Ok(self.ciphertext.v)
             },
             mode,
         )?;
 
-        let w = FpVar::<E::Fq>::new_variable(
+        let w = FpVar::<<E::G1 as CurveGroup>::BaseField>::new_variable(
             ns!(cs, "ciphertext_w"),
             || {
-                Ok(self.resulted_ciphertext.w)
+                Ok(self.ciphertext.w)
             },
             mode,
         )?;
@@ -282,41 +304,41 @@ impl<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>> Circuit<E, P>
     }
 }
 
-impl<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>> ConstraintSynthesizer<E::Fq> for Circuit<E, P>
-    where E::Fq: PrimeField + Absorb,
+impl<E: Pairing, P: Bls12Parameters<Fp = <E::G1 as CurveGroup>::BaseField>> ConstraintSynthesizer<<E::G1 as CurveGroup>::BaseField> for Circuit<E, P>
+    where <E::G1 as CurveGroup>::BaseField: PrimeField + Absorb,
           E: Hash2Curve + GtAbsorbable,
-          ProjectiveVar<P::G1Parameters, FpVar<P::Fp>>: AllocVar<E::G1Projective, E::Fq> + CurveVar<E::G1Projective, E::Fq> + AllocVar<E::G1Projective, P::Fp>,
-          E::Fqk: Borrow<QuadExtField<Fp12ParamsWrapper<P::Fp12Params>>>,
+          E::TargetField: Borrow<QuadExtField<Fp12ConfigWrapper<<P as Bls12Parameters>::Fp12Config>>>,
+          ProjectiveVar<P::G1Parameters, FpVar<P::Fp>>: AllocVar<E::G1, <E::G1 as CurveGroup>::BaseField> + CurveVar<E::G1, <E::G1 as CurveGroup>::BaseField> + AllocVar<E::G1, P::Fp>,
 {
     fn generate_constraints(
         self,
-        cs: ConstraintSystemRef<E::Fq>,
+        cs: ConstraintSystemRef<<E::G1 as CurveGroup>::BaseField>,
     ) -> Result<(), SynthesisError> {
-        let gid = Fp12Var::<P::Fp12Params>::new_input(ns!(cs, "gid"), || Ok(self.gid))?;
-        let message = FpVar::<E::Fq>::new_witness(ns!(cs, "plaintext"), || {
+        let gid = Fp12Var::<P::Fp12Config>::new_input(ns!(cs, "gid"), || Ok(self.gid))?;
+        let ciphertext = self.ciphertext_var(cs.clone(), AllocationMode::Input)?;
+        let message = FpVar::<<E::G1 as CurveGroup>::BaseField>::new_witness(ns!(cs, "plaintext"), || {
             Ok(self.msg)
         })?;
-        let ciphertext = self.ciphertext_var(cs.clone(), AllocationMode::Input)?;
 
         self.verify_encryption(cs.clone(), gid, &message, &ciphertext)
     }
 }
 
-pub struct NonnativeCircuit<PC: ProjectiveCurve>
+pub struct NonnativeCircuit<PC: CurveGroup>
     where PC::BaseField: PrimeField
 {
     gid: ark_bls12_381::Fq12,
     sigma: Randomness<ark_bls12_381::G1Projective>,
     master: PublicKey<Bls12_381>,
     msg: Plaintext<ark_bls12_381::G1Projective>,
-    pub resulted_ciphertext: Ciphertext<ark_bls12_381::G1Projective>,
+    pub ciphertext: Ciphertext<ark_bls12_381::G1Projective>,
     params: Parameters<PC>,
 }
 
-impl<PC: ProjectiveCurve> NonnativeCircuit<PC>
+impl<PC: CurveGroup> NonnativeCircuit<PC>
     where PC::BaseField: PrimeField
 {
-    pub fn new<I: AsRef<[u8]>, R: Rng + CryptoRng>(
+    pub fn new<I: AsRef<[u8]>, R: Rng>(
         master: PublicKey<Bls12_381>,
         id: I,
         msg: Plaintext<ark_bls12_381::G1Projective>,
@@ -333,21 +355,9 @@ impl<PC: ProjectiveCurve> NonnativeCircuit<PC>
             sigma,
             msg,
             master,
-            resulted_ciphertext: ct,
+            ciphertext: ct,
             params,
         })
-    }
-
-    pub fn get_public_inputs(
-        cipher: &Ciphertext<ark_bls12_381::G1Projective>,
-    ) -> Vec<PC::BaseField>
-    {
-        // let u_inputs = cipher.u.to_field_elements().unwrap();
-        // let v_inputs = cipher.v.to_field_elements().unwrap();
-        // let w_inputs = cipher.w.to_field_elements().unwrap();
-        //
-        // u_inputs.into_iter().chain(v_inputs).chain(w_inputs).collect()
-        vec![]
     }
 
     pub fn decrypt(
@@ -356,6 +366,22 @@ impl<PC: ProjectiveCurve> NonnativeCircuit<PC>
     ) -> anyhow::Result<Plaintext<ark_bls12_381::G1Projective>> {
         Circuit::<Bls12_381, ark_bls12_381::Parameters>::decrypt(sk, ct)
     }
+
+    // pub fn get_public_input(
+    //     gid: &ark_bls12_381::Fq12,
+    //     cipher: &Ciphertext<ark_bls12_381::G1Projective>,
+    // ) -> Vec<PC::BaseField>
+    // {
+    //     let gid_inputs = gid.to_field_elements().unwrap();
+    //
+    //     let mut u_inputs = cipher.u.to_field_elements().unwrap();
+    //     let v_inputs = cipher.v.to_field_elements().unwrap();
+    //     let w_inputs = cipher.w.to_field_elements().unwrap();
+    //
+    //     u_inputs[2] = ark_bls12_381::Fq::one();
+    //
+    //     gid_inputs.into_iter().chain(u_inputs).chain(v_inputs).chain(w_inputs).collect()
+    // }
 
     pub(crate) fn verify_encryption(
         &self,
@@ -366,11 +392,11 @@ impl<PC: ProjectiveCurve> NonnativeCircuit<PC>
     ) -> Result<(), SynthesisError> {
         let g_x = FqVar::new_constant(
             ns!(cs, "ciphertext_u_x"),
-            &ark_bls12_381::G1Projective::prime_subgroup_generator().x
+            &ark_bls12_381::G1Projective::generator().x
         )?;
         let g_y = FqVar::new_constant(
             ns!(cs, "ciphertext_u_x"),
-            &ark_bls12_381::G1Projective::prime_subgroup_generator().y
+            &ark_bls12_381::G1Projective::generator().y
         )?;
         let g = G1Var::new(
             g_x, g_y
@@ -433,14 +459,14 @@ impl<PC: ProjectiveCurve> NonnativeCircuit<PC>
         let u_x = FqVar::new_variable(
             ns!(cs, "ciphertext_u_x"),
             || {
-                Ok(self.resulted_ciphertext.u.x)
+                Ok(self.ciphertext.u.x)
             },
             mode,
         )?;
         let u_y = FqVar::new_variable(
             ns!(cs, "ciphertext_u_x"),
             || {
-                Ok(self.resulted_ciphertext.u.y)
+                Ok(self.ciphertext.u.y)
             },
             mode,
         )?;
@@ -451,7 +477,7 @@ impl<PC: ProjectiveCurve> NonnativeCircuit<PC>
         let v = FqVar::new_variable(
             ns!(cs, "ciphertext_v"),
             || {
-                Ok(self.resulted_ciphertext.v)
+                Ok(self.ciphertext.v)
             },
             mode,
         )?;
@@ -459,7 +485,7 @@ impl<PC: ProjectiveCurve> NonnativeCircuit<PC>
         let w = FqVar::new_variable(
             ns!(cs, "ciphertext_w"),
             || {
-                Ok(self.resulted_ciphertext.w)
+                Ok(self.ciphertext.w)
             },
             mode,
         )?;
@@ -468,7 +494,7 @@ impl<PC: ProjectiveCurve> NonnativeCircuit<PC>
     }
 }
 
-impl<PC: ProjectiveCurve> ConstraintSynthesizer<PC::BaseField> for NonnativeCircuit<PC>
+impl<PC: CurveGroup> ConstraintSynthesizer<PC::BaseField> for NonnativeCircuit<PC>
     where PC::BaseField: PrimeField
 {
     fn generate_constraints(
@@ -485,6 +511,26 @@ impl<PC: ProjectiveCurve> ConstraintSynthesizer<PC::BaseField> for NonnativeCirc
     }
 }
 
+// This is a modified native circuit for experimental use with Gemini proving system.
+// Due to mis-configured (hopefully) padding mechanism of Gemini this circuit intentionally has no input variables.
+// For more details see: https://github.com/arkworks-rs/gemini/issues/5
+pub struct GeminiNativeCircuit(pub Circuit<Bls12_381, ark_bls12_381::Parameters>);
+
+impl ConstraintSynthesizer<ark_bls12_381::Fq> for GeminiNativeCircuit {
+    fn generate_constraints(
+        self,
+        cs: ConstraintSystemRef<ark_bls12_381::Fq>,
+    ) -> Result<(), SynthesisError> {
+        let gid = Fp12Var::<ark_bls12_381::Fq12Config>::new_witness(ns!(cs, "gid"), || Ok(self.0.gid))?;
+        let ciphertext = self.0.ciphertext_var(cs.clone(), AllocationMode::Witness)?;
+        let message = FpVar::<ark_bls12_381::Fq>::new_witness(ns!(cs, "plaintext"), || {
+            Ok(self.0.msg)
+        })?;
+
+        self.0.verify_encryption(cs.clone(), gid, &message, &ciphertext)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use ark_std::test_rng;
@@ -493,9 +539,10 @@ mod tests {
 
     use ark_bls12_377::{G1Projective as ProjectiveEngine, Fq, Fr, Fq12, G1Affine, Bls12_377};
     use ark_bw6_761::BW6_761;
+    use ark_ec::AffineRepr;
 
     use ark_ff::{Field, Zero};
-    use ark_groth16::Groth16;
+    // use ark_groth16::Groth16;
     use ark_serialize::CanonicalSerialize;
 
     use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
@@ -528,6 +575,6 @@ mod tests {
         };
 
         let pt = TestCircuit::decrypt(&sk, &ct).unwrap();
-        // assert_eq!(pt, msg)
+        assert_eq!(pt, msg)
     }
 }

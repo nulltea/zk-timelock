@@ -16,3 +16,5 @@ Cargo.lock
 /Cargo.lock
 
 .idea/
+
+src/yt6_776/sage_scripts/.ipynb_checkpoints/

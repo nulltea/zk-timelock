@@ -1,18 +1,16 @@
 use std::borrow::Borrow;
 use std::marker::PhantomData;
 use std::ops::{Add, AddAssign};
-use ark_ec::{bls12, SWModelParameters};
+use ark_ec::{bls12, short_weierstrass::SWCurveConfig};
 use ark_ec::bls12::Bls12Parameters;
-use ark_ec::group::Group;
-use ark_ff::{Field, Fp12, Fp12Parameters, Fp2Parameters, One, PrimeField, QuadExtField, QuadExtParameters, Zero};
-use ark_nonnative_field::NonNativeFieldVar;
+use ark_ff::{Field, Fp12, One, PrimeField, QuadExtField, Zero};
 use ark_r1cs_std::boolean::Boolean;
 use ark_r1cs_std::eq::EqGadget;
 use ark_r1cs_std::fields::{FieldOpsBounds, FieldVar};
 use ark_r1cs_std::fields::fp::FpVar;
-use ark_r1cs_std::fields::quadratic_extension::QuadExtVarParams;
-use ark_r1cs_std::prelude::{AllocationMode, AllocVar, CondSelectGadget, UInt8};
+use ark_r1cs_std::prelude::*;
 use ark_r1cs_std::{R1CSVar, ToConstraintFieldGadget};
+use ark_r1cs_std::fields::nonnative::NonNativeFieldVar;
 use ark_relations::r1cs::{Namespace, SynthesisError};
 use ark_sponge::constraints::AbsorbGadget;
 
@@ -23,7 +21,7 @@ pub type Fq6Var<CF> = Fp6Var<ark_bls12_381::Fq, CF>;
 pub type Fq12Var<CF> = Fp12Var<ark_bls12_381::Fq, CF>;
 
 #[derive(Clone, Debug)]
-pub struct NonNativeAffineVar<P: SWModelParameters, CF: PrimeField>
+pub struct NonNativeAffineVar<P: SWCurveConfig, CF: PrimeField>
     where P::BaseField: PrimeField
 {
     x: NonNativeFieldVar<P::BaseField, CF>,
@@ -31,7 +29,7 @@ pub struct NonNativeAffineVar<P: SWModelParameters, CF: PrimeField>
     z: NonNativeFieldVar<P::BaseField, CF>,
 }
 
-impl<P: SWModelParameters + Clone, CF: PrimeField> NonNativeAffineVar<P, CF>
+impl<P: SWCurveConfig + Clone, CF: PrimeField> NonNativeAffineVar<P, CF>
     where P::BaseField: PrimeField
 {
     pub fn new(
@@ -83,7 +81,7 @@ impl<P: SWModelParameters + Clone, CF: PrimeField> NonNativeAffineVar<P, CF>
 }
 
 fn mul_by_coeff_a<
-    P: SWModelParameters,
+    P: SWCurveConfig,
     CF: PrimeField
 >(
     f: &NonNativeFieldVar<P::BaseField, CF>,
@@ -97,7 +95,7 @@ fn mul_by_coeff_a<
     }
 }
 
-impl<P: SWModelParameters + Clone, CF: PrimeField> Add<&Self> for NonNativeAffineVar<P, CF>
+impl<P: SWCurveConfig + Clone, CF: PrimeField> Add<&Self> for NonNativeAffineVar<P, CF>
     where P::BaseField: PrimeField
 {
     type Output = Self;
@@ -144,7 +142,7 @@ impl<P: SWModelParameters + Clone, CF: PrimeField> Add<&Self> for NonNativeAffin
 }
 
 
-impl<P: SWModelParameters, CF: PrimeField> EqGadget<CF> for NonNativeAffineVar<P, CF>
+impl<P: SWCurveConfig, CF: PrimeField> EqGadget<CF> for NonNativeAffineVar<P, CF>
     where P::BaseField: PrimeField
 {
     fn is_eq(&self, other: &Self) -> Result<Boolean<CF>, SynthesisError> {
@@ -154,7 +152,7 @@ impl<P: SWModelParameters, CF: PrimeField> EqGadget<CF> for NonNativeAffineVar<P
     }
 }
 
-impl<P: SWModelParameters + Clone, CF: PrimeField> CondSelectGadget<CF> for NonNativeAffineVar<P, CF>
+impl<P: SWCurveConfig + Clone, CF: PrimeField> CondSelectGadget<CF> for NonNativeAffineVar<P, CF>
     where P::BaseField: PrimeField
 {
     fn conditionally_select(

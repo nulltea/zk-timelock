@@ -1,18 +1,18 @@
 use anyhow::anyhow;
 use ark_bls12_377::Bls12_377;
 use ark_bls12_381::Bls12_381;
-use ark_ec::{AffineCurve, bls12, PairingEngine, ProjectiveCurve, SWModelParameters};
+use ark_ec::{bls12, CurveGroup, AffineRepr};
 use ark_ec::bls12::Bls12Parameters;
-use ark_ec::group::Group;
-use ark_ec::short_weierstrass_jacobian::GroupAffine;
-use ark_ff::{BigInteger, BigInteger256, BigInteger384, Field, Fp12ParamsWrapper, PrimeField, QuadExtField, Zero};
+use ark_ec::pairing::Pairing;
+use ark_ec::short_weierstrass::Affine;
+use ark_ff::{BigInteger, BigInteger256, BigInteger384, Field, PrimeField, QuadExtField, Zero};
 use ark_r1cs_std::fields::fp12::Fp12Var;
 use ark_r1cs_std::fields::fp::FpVar;
 use ark_serialize::{CanonicalDeserialize, SerializationError};
 use group::Curve;
 use sha2::Sha256;
 
-pub trait Hash2Curve: PairingEngine {
+pub trait Hash2Curve: Pairing {
     fn hash(msg: &[u8], dst: &[u8]) -> anyhow::Result<Self::G2Affine>;
 }
 
@@ -26,7 +26,7 @@ impl Hash2Curve for Bls12_381 where Self::G2Affine: ZkCryptoDeserialize {
 
 impl Hash2Curve for Bls12_377 {
     fn hash(msg: &[u8], dst: &[u8]) -> anyhow::Result<Self::G2Affine> {
-        Ok(Self::G2Affine::prime_subgroup_generator())
+        Ok(Self::G2Affine::generator())
     }
 }
 
@@ -35,11 +35,7 @@ pub trait ZkCryptoDeserialize: Sized {
     fn deserialize_zk_crypto_uncompressed(bytes: &[u8]) -> anyhow::Result<Self>;
 }
 
-pub trait ZkCryptoSerialize: Sized {
-    fn serialize_zk_crypto(bytes: &Self) -> anyhow::Result<Vec<u8>>;
-}
-
-impl ZkCryptoDeserialize for GroupAffine<ark_bls12_381::g1::Parameters> {
+impl ZkCryptoDeserialize for Affine<ark_bls12_381::g1::Parameters> {
     fn deserialize_zk_crypto(bytes: &[u8]) -> anyhow::Result<Self> {
         let g1 = bls12_381_plus::G1Affine::from_compressed(bytes.try_into().unwrap()).unwrap();
         let bytes = g1.to_uncompressed();
@@ -70,11 +66,11 @@ impl ZkCryptoDeserialize for GroupAffine<ark_bls12_381::g1::Parameters> {
             y
         };
 
-        Ok(ark_bls12_381::G1Affine::new(x, y, false))
+        Ok(ark_bls12_381::G1Affine::new(x, y))
     }
 }
 
-impl ZkCryptoDeserialize for GroupAffine<ark_bls12_381::g2::Parameters> {
+impl ZkCryptoDeserialize for Affine<ark_bls12_381::g2::Parameters> {
     fn deserialize_zk_crypto(bytes: &[u8]) -> anyhow::Result<Self> {
         let g2 = bls12_381_plus::G2Affine::from_compressed(bytes.try_into().unwrap()).unwrap();
         let bytes = g2.to_uncompressed();
@@ -125,7 +121,6 @@ impl ZkCryptoDeserialize for GroupAffine<ark_bls12_381::g2::Parameters> {
         Ok(ark_bls12_381::G2Affine::new(
             ark_bls12_381::Fq2::new(xc0, xc1),
             ark_bls12_381::Fq2::new(yc0, yc1),
-            false,
         ))
     }
 }
@@ -144,47 +139,35 @@ pub fn gt_scalar_mul_le<T: Field + Zero, B: AsRef<[u8]>>(trg: T, rhs: B) -> T {
         .iter()
         .rev()
         .flat_map(|byte| (0..8).rev().map(move |i| ((byte >> i) & 1u8) == 1u8))
-        .skip(1)
     {
-        let mut y = res.clone();
-
         res.square_in_place();
-        y = res.clone();
         if bit {
             res *= mul;
         }
-
     }
     res
 }
 
-pub fn curve_scalar_mul_le<T: ProjectiveCurve + Zero, B: AsRef<[u8]>>(trg: T, rhs: B) -> T {
+pub fn curve_scalar_mul_le<T: CurveGroup + Zero, B: AsRef<[u8]>>(trg: T, rhs: B) -> T {
     let mut res = T::zero();
     let mut mul = trg;
-
-    let y = res.clone();
-    let x = y;
 
     for bit in rhs
         .as_ref()
         .iter()
         .rev()
         .flat_map(|byte| (0..8).rev().map(move |i| ((byte >> i) & 1u8) == 1u8))
-        .skip(1)
     {
         res.double_in_place();
         if bit {
-            res = res.add(&mul)
+            res += mul;
         }
-
-        let y = res.clone();
-        let x = y;
     }
     res
 }
 
-pub trait GtAbsorbable: PairingEngine {
-    fn gt_to_absorbable(gt: &Self::Fqk) -> Vec<Self::Fq>;
+pub trait GtAbsorbable: Pairing {
+    fn gt_to_absorbable(gt: &Self::TargetField) -> Vec<<Self::G1 as CurveGroup>::BaseField>;
 }
 
 impl GtAbsorbable for ark_bls12_381::Bls12_381 {
@@ -225,7 +208,8 @@ impl GtAbsorbable for ark_bls12_377::Bls12_377 {
     }
 }
 
-pub fn gtvar_to_fqvars<E: PairingEngine, P: Bls12Parameters<Fp = E::Fq>>(gt: &Fp12Var<P::Fp12Params>) -> Vec<&FpVar<E::Fq>> {
+pub fn gtvar_to_fqvars<E: Pairing, P: Bls12Parameters<Fp = <E::G1 as CurveGroup>::BaseField>>(gt: &Fp12Var<P::Fp12Config>) -> Vec<&FpVar<<E::G1 as CurveGroup>::BaseField>>
+    where <E::G1 as CurveGroup>::BaseField: PrimeField{
     return vec![
         &gt.c0.c0.c0,
         &gt.c0.c0.c1,
@@ -253,7 +237,6 @@ mod tests {
             let bytes = hex::decode("8200fc249deb0148eb918d6e213980c5d01acd7fc251900d9260136da3b54836ce125172399ddc69c4e3e11429b62c11").unwrap();
 
             let g1 = ark_bls12_381::G1Affine::deserialize_zk_crypto(&bytes).unwrap();
-
         };
     }
 }
