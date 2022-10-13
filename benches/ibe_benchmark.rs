@@ -8,12 +8,14 @@ use ark_groth16::Groth16;
 use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
 use ark_std::{test_rng, UniformRand};
 use sha2::Digest;
-use tracing::{warn_span, info_span, warn};
-use tracing_subscriber::fmt::format;
+use tracing::{info_span, info, Level};
+use tracing_subscriber::fmt::{format, init};
 use tracing_subscriber::fmt::format::FmtSpan;
 use zk_tlock::{Circuit, NonnativeCircuit, Parameters};
 use zk_tlock::utils::ZkCryptoDeserialize;
 use ark_std::rand::Rng;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 fn test_groth16_native_bls12_377() {
     type TestCircuit = Circuit::<Bls12_377, ark_bls12_377::Parameters>;
@@ -44,7 +46,7 @@ fn test_groth16_native_bls12_377() {
         &hash.finalize().to_vec()[0..32]
     };
 
-    let circuit = warn_span!("encrypt-message").in_scope(|| {
+    let circuit = info_span!("encrypt-message").in_scope(|| {
         Circuit::<ark_bls12_377::Bls12_377, ark_bls12_377::Parameters>::new(
             master.clone(),
             &id,
@@ -52,7 +54,7 @@ fn test_groth16_native_bls12_377() {
             &mut rng)
     }).unwrap();
 
-    let (pk, vk) = warn_span!("groth16::setup").in_scope(||
+    let (pk, vk) = info_span!("groth16::setup").in_scope(||
         Groth16::<BW6_761>::setup(circuit, &mut rng)
     ).unwrap();
 
@@ -61,17 +63,17 @@ fn test_groth16_native_bls12_377() {
 
     let public_input = TestCircuit::get_public_inputs(&circuit.gid, &ct);
 
-    let proof = warn_span!("groth16::prove").in_scope(||
+    let proof = info_span!("groth16::prove").in_scope(||
         Groth16::prove(&pk, circuit, &mut rng)
     ).unwrap();
 
-    let verified = warn_span!("groth16::verify").in_scope(||
+    let verified = info_span!("groth16::verify").in_scope(||
         Groth16::verify(&vk, &public_input, &proof)
     ).unwrap();
 
     assert!(verified);
 
-    let pt = warn_span!("decrypt message").in_scope(||
+    let pt = info_span!("decrypt message").in_scope(||
         TestCircuit::decrypt(&priv_key, &ct)
     ).unwrap();
 
@@ -96,7 +98,7 @@ fn test_groth16_nonnative_bls12_381() {
         &hash.finalize().to_vec()[0..32]
     };
 
-    let circuit = warn_span!("encrypt-message").in_scope(|| {
+    let circuit = info_span!("encrypt-message").in_scope(|| {
         TestCircuit::new(
             master.clone(),
             &id,
@@ -104,14 +106,15 @@ fn test_groth16_nonnative_bls12_381() {
             &mut rng)
     }).unwrap();
 
-    let (pk, _vk) = warn_span!("groth16 setup").in_scope(||
+    let (pk, _vk) = info_span!("groth16 setup").in_scope(||
         Groth16::<BW6_761>::setup(circuit, &mut rng)
     ).unwrap();
 
     let circuit = TestCircuit::new(master, id, msg.clone().into(), &mut rng).unwrap();
-    let ct = circuit.resulted_ciphertext.clone();
+    let ct = circuit.ciphertext.clone();
+    // let public_input = TestCircuit::get_public_inputs(&circuit.gid, &ct);
 
-    let _proof = warn_span!("groth16 prove").in_scope(||
+    let _proof = info_span!("groth16::prove").in_scope(||
         Groth16::prove(&pk, circuit, &mut rng)
     ).unwrap();
 
@@ -120,7 +123,13 @@ fn test_groth16_nonnative_bls12_381() {
         ark_bls12_381::G2Affine::deserialize_zk_crypto(&bytes).unwrap()
     };
 
-    let pt = warn_span!("decrypt message").in_scope(||
+    // let verified = info_span!("groth16::verify").in_scope(||
+    //     Groth16::verify(&vk, &public_input, &proof)
+    // ).unwrap();
+
+    // assert!(verified);
+
+    let pt = info_span!("decrypt message").in_scope(||
         TestCircuit::decrypt(&priv_key, &ct)
     ).unwrap();
 
@@ -145,7 +154,7 @@ fn test_gemini_native_yata_127() {
         &hash.finalize().to_vec()[0..32]
     };
 
-    let circuit = warn_span!("encrypt-message").in_scope(|| {
+    let circuit = info_span!("encrypt-message").in_scope(|| {
         TestCircuit::new(
             master.clone(),
             &id,
@@ -156,24 +165,24 @@ fn test_gemini_native_yata_127() {
     let circuit = TestCircuit::new(master, id, msg.clone().into(), &mut rng).unwrap();
     let ct = circuit.ciphertext.clone();
 
-    let r1cs = warn_span!("gemini::generate_relation").in_scope(||
+    let r1cs = info_span!("gemini::generate_relation").in_scope(||
         ark_gemini::circuit::generate_relation::<ark_bls12_381::Fq, TestCircuit>(circuit)
     );
 
-    warn!("r1cs size: {}", r1cs.a.len());
+    info!("r1cs size: {}", r1cs.a.len());
 
     let num_constraints = 50000;
     let num_variables = 100;
     let num_non_zero = 50000;
 
-    let ck = warn_span!("gemini::setup").in_scope(||
+    let ck = info_span!("gemini::setup").in_scope(||
         ark_gemini::kzg::CommitterKey::<zk_tlock::yata_127::Yata>::new(
         num_non_zero + num_variables + num_constraints,
         5,
         &mut rng,
     ));
 
-    let _proof = warn_span!("gemini::prove").in_scope(||
+    let _proof = info_span!("gemini::prove").in_scope(||
         ark_gemini::psnark::Proof::new_time(&r1cs, &ck)
     );
 
@@ -182,7 +191,7 @@ fn test_gemini_native_yata_127() {
         ark_bls12_381::G2Affine::deserialize_zk_crypto(&bytes).unwrap()
     };
 
-    let pt = warn_span!("decrypt message").in_scope(||
+    let pt = info_span!("decrypt message").in_scope(||
         TestCircuit::decrypt(&priv_key, &ct)
     ).unwrap();
 
@@ -207,7 +216,7 @@ fn test_groth16_native_yata_127() {
         &hash.finalize().to_vec()[0..32]
     };
 
-    let circuit = warn_span!("encrypt-message").in_scope(|| {
+    let circuit = info_span!("encrypt-message").in_scope(|| {
         TestCircuit::new(
             master.clone(),
             &id,
@@ -215,17 +224,16 @@ fn test_groth16_native_yata_127() {
             &mut rng)
     }).unwrap();
 
-    let circuit = TestCircuit::new(master, id, msg.clone().into(), &mut rng).unwrap();
     let ct = circuit.ciphertext.clone();
 
-    let (pk, _vk) = warn_span!("groth16 setup").in_scope(||
+    let (pk, _vk) = info_span!("groth16 setup").in_scope(||
         Groth16::<zk_tlock::yata_127::Yata>::setup(circuit, &mut rng)
     ).unwrap();
 
     let circuit = TestCircuit::new(master, id, msg.clone().into(), &mut rng).unwrap();
     let ct = circuit.ciphertext.clone();
 
-    let _proof = warn_span!("groth16 prove").in_scope(||
+    let _proof = info_span!("groth16 prove").in_scope(||
         Groth16::prove(&pk, circuit, &mut rng)
     ).unwrap();
 
@@ -235,23 +243,28 @@ fn test_groth16_native_yata_127() {
         ark_bls12_381::G2Affine::deserialize_zk_crypto(&bytes).unwrap()
     };
 
-    let pt = warn_span!("decrypt message").in_scope(||
+    let pt = info_span!("decrypt message").in_scope(||
         TestCircuit::decrypt(&priv_key, &ct)
     ).unwrap();
 
     assert_eq!(msg, pt)
 }
 
-fn main() {
-    let filter_layer = tracing_subscriber::EnvFilter::try_from_default_env()
-        .or_else(|_| tracing_subscriber::EnvFilter::try_new("warn"))
-        .unwrap();
+fn setup_tracing() {
+    let filter = tracing_subscriber::filter::Targets::new()
+        .with_target("ibe_benchmark", Level::INFO);
 
-    let _ = tracing_subscriber::fmt()
-        .with_span_events(FmtSpan::CLOSE)
-        .with_env_filter(filter_layer)
-        .event_format(format().compact())
-        .try_init();
+    let fmt = tracing_subscriber::fmt::layer()
+        .with_span_events(FmtSpan::CLOSE);
+
+    let _ = tracing_subscriber::registry()
+        .with(fmt)
+        .with(filter)
+        .init();
+}
+
+fn main() {
+    setup_tracing();
 
     println!("Groth16 (native) on BLS12-377");
     test_groth16_native_bls12_377();

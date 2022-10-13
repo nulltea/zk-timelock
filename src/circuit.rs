@@ -29,6 +29,7 @@ use ark_sponge::{Absorb, CryptographicSponge, FieldBasedCryptographicSponge};
 use group::Curve as _;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_bls12_381::Bls12_381;
+use ark_r1cs_std::fields::nonnative::NonNativeFieldVar;
 use ark_r1cs_std::groups::curves::short_weierstrass::ProjectiveVar;
 use crate::utils::{curve_scalar_mul_le, gt_scalar_mul_le, GtAbsorbable, gtvar_to_fqvars, Hash2Curve, ZkCryptoDeserialize};
 use sha2::Sha256;
@@ -331,7 +332,7 @@ pub struct NonnativeCircuit<PC: CurveGroup>
     sigma: Randomness<ark_bls12_381::G1Projective>,
     master: PublicKey<Bls12_381>,
     msg: Plaintext<ark_bls12_381::G1Projective>,
-    pub resulted_ciphertext: Ciphertext<ark_bls12_381::G1Projective>,
+    pub ciphertext: Ciphertext<ark_bls12_381::G1Projective>,
     params: Parameters<PC>,
 }
 
@@ -355,21 +356,9 @@ impl<PC: CurveGroup> NonnativeCircuit<PC>
             sigma,
             msg,
             master,
-            resulted_ciphertext: ct,
+            ciphertext: ct,
             params,
         })
-    }
-
-    pub fn get_public_inputs(
-        cipher: &Ciphertext<ark_bls12_381::G1Projective>,
-    ) -> Vec<PC::BaseField>
-    {
-        // let u_inputs = cipher.u.to_field_elements().unwrap();
-        // let v_inputs = cipher.v.to_field_elements().unwrap();
-        // let w_inputs = cipher.w.to_field_elements().unwrap();
-        //
-        // u_inputs.into_iter().chain(v_inputs).chain(w_inputs).collect()
-        vec![]
     }
 
     pub fn decrypt(
@@ -378,6 +367,22 @@ impl<PC: CurveGroup> NonnativeCircuit<PC>
     ) -> anyhow::Result<Plaintext<ark_bls12_381::G1Projective>> {
         Circuit::<Bls12_381, ark_bls12_381::Parameters>::decrypt(sk, ct)
     }
+
+    // pub fn get_public_input(
+    //     gid: &ark_bls12_381::Fq12,
+    //     cipher: &Ciphertext<ark_bls12_381::G1Projective>,
+    // ) -> Vec<PC::BaseField>
+    // {
+    //     let gid_inputs = gid.to_field_elements().unwrap();
+    //
+    //     let mut u_inputs = cipher.u.to_field_elements().unwrap();
+    //     let v_inputs = cipher.v.to_field_elements().unwrap();
+    //     let w_inputs = cipher.w.to_field_elements().unwrap();
+    //
+    //     u_inputs[2] = ark_bls12_381::Fq::one();
+    //
+    //     gid_inputs.into_iter().chain(u_inputs).chain(v_inputs).chain(w_inputs).collect()
+    // }
 
     pub(crate) fn verify_encryption(
         &self,
@@ -455,14 +460,14 @@ impl<PC: CurveGroup> NonnativeCircuit<PC>
         let u_x = FqVar::new_variable(
             ns!(cs, "ciphertext_u_x"),
             || {
-                Ok(self.resulted_ciphertext.u.x)
+                Ok(self.ciphertext.u.x)
             },
             mode,
         )?;
         let u_y = FqVar::new_variable(
             ns!(cs, "ciphertext_u_x"),
             || {
-                Ok(self.resulted_ciphertext.u.y)
+                Ok(self.ciphertext.u.y)
             },
             mode,
         )?;
@@ -473,7 +478,7 @@ impl<PC: CurveGroup> NonnativeCircuit<PC>
         let v = FqVar::new_variable(
             ns!(cs, "ciphertext_v"),
             || {
-                Ok(self.resulted_ciphertext.v)
+                Ok(self.ciphertext.v)
             },
             mode,
         )?;
@@ -481,7 +486,7 @@ impl<PC: CurveGroup> NonnativeCircuit<PC>
         let w = FqVar::new_variable(
             ns!(cs, "ciphertext_w"),
             || {
-                Ok(self.resulted_ciphertext.w)
+                Ok(self.ciphertext.w)
             },
             mode,
         )?;
